@@ -1384,9 +1384,7 @@ export const updateProductIngredientsInDb = async (
         // Aggiungiamo i valori nutrizionali stimati dall'AI
         proteins_100g: roundedProteins,
         carbohydrates_100g: roundedCarbs,
-        fat_100g: roundedFats,
-        // Flag per indicare che i valori nutrizionali sono stimati dall'AI
-        has_estimated_nutrition: true
+        fat_100g: roundedFats
       })
       .eq('id', productId);
 
