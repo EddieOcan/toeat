@@ -1048,7 +1048,10 @@ export const savePhotoAnalysisIngredients = async (
       original_ai_ingredient_id: ingredient.id.startsWith('user_') ? null : ingredient.id,
       ingredient_name: ingredient.name,
       user_defined_weight_g: ingredient.estimated_weight_g,
-      user_defined_calories_kcal: ingredient.estimated_calories_kcal
+      user_defined_calories_kcal: ingredient.estimated_calories_kcal,
+      estimated_proteins_g: ingredient.estimated_proteins_g || 0,
+      estimated_carbs_g: ingredient.estimated_carbs_g || 0,
+      estimated_fats_g: ingredient.estimated_fats_g || 0
       };
       
       // Proviamo prima ad aggiungere senza quantity per verificare se la colonna esiste nel DB
@@ -1161,7 +1164,10 @@ export const loadPhotoAnalysisIngredients = async (
       name: item.ingredient_name,
       estimated_weight_g: item.user_defined_weight_g,
       estimated_calories_kcal: item.user_defined_calories_kcal,
-      quantity: item.quantity || 1 // Aggiungiamo la quantità dal DB, o 1 come valore predefinito
+      quantity: item.quantity || 1, // Aggiungiamo la quantità dal DB, o 1 come valore predefinito
+      estimated_proteins_g: item.estimated_proteins_g || 0, // Aggiungiamo i valori nutrizionali
+      estimated_carbs_g: item.estimated_carbs_g || 0,
+      estimated_fats_g: item.estimated_fats_g || 0
     }));
 
     console.log(`[SUPABASE SUCCESS] Caricati ${ingredients.length} ingredienti personalizzati per productId: ${productRecordId}`);
