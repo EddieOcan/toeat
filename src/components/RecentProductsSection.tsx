@@ -59,6 +59,12 @@ const getScoreColor_ForRecent = (grade: string | undefined | null, type: 'nutri'
       }
     }
   }
+  
+  // Caso speciale per ecoscore mancante
+  if (type === 'eco' && (!grade || !numericScore)) {
+    return '#888888'; // Grigio per ecoscore mancante
+  }
+  
   return getColorFromNumericScore_ForRecent(numericScore, currentThemeColors);
 };
 
@@ -274,7 +280,8 @@ const RecentProductsSection: React.FC = () => {
 const styles = StyleSheet.create({
   recentProductsSection: {}, 
   recentProductsTitleContainer: { 
-    paddingHorizontal: 20, 
+    paddingLeft: 20, 
+    paddingRight: 0, 
     height: RECENT_SECTION_TITLE_HEIGHT, 
     justifyContent: 'space-between',
     flexDirection: 'row',
@@ -378,9 +385,9 @@ const styles = StyleSheet.create({
   },
   logoImage: {
     width: 100,
-    height: 35,
+    height: 45,
     resizeMode: 'contain',
-    marginTop: -15
+    marginTop: -10
   },
 });
 

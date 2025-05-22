@@ -1001,6 +1001,26 @@ export const savePhotoAnalysisIngredients = async (
       return false;
     }
 
+    // Verifichiamo prima se la colonna quantity esiste nella tabella
+    let hasQuantityColumn = true;
+    try {
+      // Eseguiamo una query di verifica sulla struttura della tabella
+      const { data: columnInfo, error: columnError } = await supabase.rpc('get_column_info', {
+        table_name: 'photo_analysis_ingredients',
+        column_name: 'quantity'
+      });
+      
+      if (columnError || !columnInfo || columnInfo.length === 0) {
+        console.log("[SUPABASE INFO] La colonna 'quantity' potrebbe non esistere o non essere visibile:", columnError);
+        hasQuantityColumn = false;
+      } else {
+        console.log("[SUPABASE INFO] La colonna 'quantity' è presente nella tabella");
+      }
+    } catch (e) {
+      // Se la funzione RPC non esiste, assumiamo che non possiamo verificare
+      console.log("[SUPABASE INFO] Non è stato possibile verificare l'esistenza della colonna 'quantity':", e);
+    }
+
     // Prima rimuoviamo gli ingredienti esistenti (se ce ne sono)
     const { error: deleteError } = await supabase
       .from('photo_analysis_ingredients')
@@ -1020,22 +1040,76 @@ export const savePhotoAnalysisIngredients = async (
     }
 
     // Prepariamo i dati per l'inserimento
-    const ingredientsToInsert = ingredients.map(ingredient => ({
+    const ingredientsToInsert = ingredients.map(ingredient => {
+      // Creiamo prima un oggetto base senza quantity
+      const baseIngredient = {
       product_record_id: productRecordId,
       user_id: userId,
       original_ai_ingredient_id: ingredient.id.startsWith('user_') ? null : ingredient.id,
       ingredient_name: ingredient.name,
       user_defined_weight_g: ingredient.estimated_weight_g,
       user_defined_calories_kcal: ingredient.estimated_calories_kcal
-    }));
+      };
+      
+      // Proviamo prima ad aggiungere senza quantity per verificare se la colonna esiste nel DB
+      try {
+        // Se la proprietà quantity è definita, proviamo ad aggiungerla all'oggetto
+        if (ingredient.quantity !== undefined) {
+          return {
+            ...baseIngredient,
+            quantity: ingredient.quantity || 1
+          };
+        }
+        return baseIngredient;
+      } catch (e) {
+        console.log("[SUPABASE WORKAROUND] Non è stato possibile includere quantity, uso solo i campi base");
+        return baseIngredient;
+      }
+    });
+
+    // Se la colonna non è disponibile, filtriamo la proprietà quantity
+    let finalIngredientsToInsert = ingredientsToInsert;
+    if (!hasQuantityColumn) {
+      console.log("[SUPABASE WORKAROUND] Rimuovo il campo quantity da tutti gli ingredienti prima dell'inserimento");
+      finalIngredientsToInsert = ingredientsToInsert.map(ing => {
+        // Creiamo una copia senza quantity
+        const { quantity, ...restOfIngredient } = ing as any;
+        return restOfIngredient;
+      });
+    }
 
     // Inseriamo i nuovi ingredienti
     const { error: insertError } = await supabase
       .from('photo_analysis_ingredients')
-      .insert(ingredientsToInsert);
+      .insert(finalIngredientsToInsert);
 
     if (insertError) {
       console.error("[SUPABASE ERROR] Errore durante l'inserimento dei nuovi ingredienti:", insertError);
+      
+      // Se l'errore contiene "quantity" nel messaggio, tentiamo di nuovo senza quantity
+      if (insertError.message?.includes('quantity') && hasQuantityColumn) {
+        console.log("[SUPABASE RETRY] Riprovo senza il campo quantity per errore specifico sulla colonna");
+        
+        // Rimuoviamo quantity da tutti gli ingredienti
+        const ingredientsWithoutQuantity = ingredientsToInsert.map(ing => {
+          const { quantity, ...restOfIngredient } = ing as any;
+          return restOfIngredient;
+        });
+        
+        // Proviamo di nuovo l'inserimento
+        const { error: retryError } = await supabase
+          .from('photo_analysis_ingredients')
+          .insert(ingredientsWithoutQuantity);
+          
+        if (retryError) {
+          console.error("[SUPABASE ERROR] Errore anche nel secondo tentativo:", retryError);
+          return false;
+        } else {
+          console.log("[SUPABASE SUCCESS] Inserimento riuscito al secondo tentativo (senza quantity)");
+          return true;
+        }
+      }
+      
       return false;
     }
 
@@ -1086,7 +1160,8 @@ export const loadPhotoAnalysisIngredients = async (
       id: item.original_ai_ingredient_id || `user_${item.id}`, // Usa l'ID originale dell'AI se disponibile, altrimenti crea un ID utente
       name: item.ingredient_name,
       estimated_weight_g: item.user_defined_weight_g,
-      estimated_calories_kcal: item.user_defined_calories_kcal
+      estimated_calories_kcal: item.user_defined_calories_kcal,
+      quantity: item.quantity || 1 // Aggiungiamo la quantità dal DB, o 1 come valore predefinito
     }));
 
     console.log(`[SUPABASE SUCCESS] Caricati ${ingredients.length} ingredienti personalizzati per productId: ${productRecordId}`);
@@ -1265,48 +1340,59 @@ export const saveProductToDatabase = async (
 }
 
 /**
- * Aggiorna i campi ingredients_breakdown e calories_estimate per un prodotto specifico nella tabella products.
- * @param productRecordId L'ID del record del prodotto da aggiornare.
- * @param newIngredients Il nuovo array di ingredienti (sarà salvato come JSONB).
- * @param newCaloriesEstimate La nuova stringa della stima calorica (es. "Totale: ~500 kcal").
- * @returns Promise<boolean> true se l'aggiornamento ha avuto successo, false altrimenti.
+ * Aggiorna gli ingredienti di un prodotto nel database e salva la stima delle calorie e valori nutrizionali
+ * @param productId ID del prodotto da aggiornare
+ * @param ingredients Array di ingredienti stimati
+ * @param caloriesEstimate Stringa con stima delle calorie (es. "Totale: ~550 kcal")
+ * @returns true se l'aggiornamento è riuscito, false altrimenti
  */
 export const updateProductIngredientsInDb = async (
-  productRecordId: string,
-  newIngredients: EstimatedIngredient[],
-  newCaloriesEstimate: string 
+  productId: string,
+  ingredients: EstimatedIngredient[],
+  caloriesEstimate: string
 ): Promise<boolean> => {
+  if (!productId || !ingredients || ingredients.length === 0) {
+    console.error('[updateProductIngredientsInDb] Dati mancanti per aggiornamento:', { productId, ingredients });
+    return false;
+  }
+  
   try {
-    if (!supabase) {
-      console.error("[SUPABASE ERROR] Client non inizializzato in updateProductIngredientsInDb");
-      return false;
-    }
+    // Calcola i totali dei valori nutrizionali
+    const totalProteins = ingredients.reduce((acc, ing) => acc + ((ing.estimated_proteins_g || 0) * (ing.quantity || 1)), 0);
+    const totalCarbs = ingredients.reduce((acc, ing) => acc + ((ing.estimated_carbs_g || 0) * (ing.quantity || 1)), 0);
+    const totalFats = ingredients.reduce((acc, ing) => acc + ((ing.estimated_fats_g || 0) * (ing.quantity || 1)), 0);
+    
+    // Arrotonda a 1 decimale
+    const roundedProteins = Number(totalProteins.toFixed(1));
+    const roundedCarbs = Number(totalCarbs.toFixed(1));
+    const roundedFats = Number(totalFats.toFixed(1));
+    
+    console.log(`[updateProductIngredientsInDb] Valori nutrizionali calcolati: Proteine=${roundedProteins}g, Carb=${roundedCarbs}g, Grassi=${roundedFats}g`);
 
-    console.log(`[DB UPDATE] Tentativo di aggiornare product ${productRecordId} con nuovi ingredienti e stima calorie.`);
-    logServer(`[DB UPDATE] Product ${productRecordId}, NewCalEstimate: ${newCaloriesEstimate}, NewIngredients: ${JSON.stringify(newIngredients).substring(0,100)}...`);
-
-
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('products')
       .update({
-        ingredients_breakdown: newIngredients, // Supabase client gestisce la serializzazione in JSONB
-        calories_estimate: newCaloriesEstimate 
-        // Il trigger SQL 'trigger_set_calories_from_ingredients' dovrebbe anche aggiornare 
-        // calories_estimate se ingredients_breakdown cambia, ma per sicurezza lo impostiamo anche qui.
+        ingredients_breakdown: JSON.stringify(ingredients),
+        calories_estimate: caloriesEstimate,
+        calorie_estimation_type: 'breakdown',
+        // Aggiungiamo i valori nutrizionali stimati dall'AI
+        proteins_100g: roundedProteins,
+        carbohydrates_100g: roundedCarbs,
+        fat_100g: roundedFats,
+        // Flag per indicare che i valori nutrizionali sono stimati dall'AI
+        has_estimated_nutrition: true
       })
-      .eq('id', productRecordId);
+      .eq('id', productId);
 
     if (error) {
-      console.error("[DB ERROR] Errore nell'aggiornamento di ingredients_breakdown e calories_estimate in products:", error);
-      logServer(`[DB ERROR] Product ${productRecordId}, Update failed: ${error.message}`);
+      console.error('[updateProductIngredientsInDb] Errore update Supabase:', error);
       return false;
     }
-    console.log(`[DB SUCCESS] Aggiornati ingredients_breakdown e calories_estimate per product ${productRecordId}`);
-    logServer(`[DB SUCCESS] Product ${productRecordId} ingredients updated.`);
+    
+    console.log('[updateProductIngredientsInDb] Aggiornamento riuscito per productId:', productId);
     return true;
-  } catch (e) {
-    console.error("[API ERROR] Eccezione in updateProductIngredientsInDb:", e);
-    logServer(`[API ERROR] Product ${productRecordId}, Exception in updateProductIngredientsInDb: ${e instanceof Error ? e.message : String(e)}`);
+  } catch (error) {
+    console.error('[updateProductIngredientsInDb] Errore:', error);
     return false;
   }
 };

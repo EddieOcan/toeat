@@ -17,6 +17,8 @@ import {
   ViewStyle,
   TextStyle,
   TextInput, // Unico import da 'react-native'
+  Dimensions,
+  findNodeHandle, // <<< AGGIUNTO QUESTO
 } from "react-native"
 import { useTheme } from "../../contexts/ThemeContext"
 import type { NativeStackScreenProps } from "@react-navigation/native-stack"
@@ -215,10 +217,20 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
   const [isAddingIngredient, setIsAddingIngredient] = useState(false);
   const [newIngredientName, setNewIngredientName] = useState("");
   const [newIngredientWeight, setNewIngredientWeight] = useState("");
+  const [newIngredientQuantity, setNewIngredientQuantity] = useState("1"); // Nuovo stato per quantità
   // Stato per modifiche non salvate
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   // Stato per il salvataggio in corso
   const [isSavingIngredients, setIsSavingIngredients] = useState(false);
+
+  // Nuovi stati per gestire il focus degli input
+  const [weightInputFocused, setWeightInputFocused] = useState<string | null>(null);
+  const [nameInputFocused, setNameInputFocused] = useState(false);
+
+  // Riferimento allo ScrollView per lo scroll automatico
+  const scrollViewRef = useRef<ScrollView>(null);
+  // Riferimenti per i componenti che potrebbero richiedere lo scroll
+  const inputRefs = useRef<{[key: string]: { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => void } | null}>({}); 
 
   // Determina se le funzionalità dei preferiti devono essere disabilitate
   const disableFavoriteFeature = useMemo(() => {
@@ -254,16 +266,16 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
   const IMAGE_SHADOW_OFFSET = 2; // Offset per l'ombra dell'immagine dentro la card
 
   // Costanti per le "pillole" dei valori nutrizionali
-  const PILL_BORDER_WIDTH = 2;
-  const PILL_SHADOW_OFFSET = 2.5;
-  const PILL_BORDER_RADIUS = 10;
+  const PILL_BORDER_WIDTH = 1.5;
+  const PILL_SHADOW_OFFSET = 1.5;
+  const PILL_BORDER_RADIUS = 15;
   const PILL_HEIGHT = 48; 
   const ICON_PILL_SIZE = 48; 
 
   const getNutrientIconName = (nutrientKey: string): string => {
     switch (nutrientKey) {
       case 'energy_kcal_100g': return 'flame';
-      case 'fat_100g': return 'water';
+      case 'fat_100g': return 'cafe'; // Cambiato da 'water' a 'cafe' (icona di una goccia di olio/grasso)
       case 'saturated_fat_100g': return 'ellipse'; // Non ha versione piena standard, usiamo outline
       case 'carbohydrates_100g': return 'layers';
       case 'sugars_100g': return 'cube';
@@ -298,13 +310,21 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
   };
 
   // Funzione helper per accedere ai valori nutrizionali in modo sicuro
-  const getNutrimentValue = (field: keyof ProductRecord | keyof NonNullable<RawProductData['nutriments']>) => {
+  const getNutrimentValue = (field: keyof ProductRecord | keyof NonNullable<RawProductData['nutriments']>): number | undefined => {
     if (!displayProductInfo) return undefined;
+
     if ('nutriments' in displayProductInfo && displayProductInfo.nutriments) {
-      return displayProductInfo.nutriments[field as keyof NonNullable<RawProductData['nutriments']>];
+      const nutrimentData = displayProductInfo.nutriments;
+      if (field in nutrimentData) {
+        const value = nutrimentData[field as keyof NonNullable<RawProductData['nutriments']>];
+        return typeof value === 'number' ? value : undefined;
+      }
+    } else if (field in displayProductInfo) {
+      const value = (displayProductInfo as ProductRecord)[field as keyof ProductRecord];
+      return typeof value === 'number' ? value : undefined;
     }
-    // Prova ad accedere direttamente se displayProductInfo è un ProductRecord o una struttura piatta
-    return (displayProductInfo as any)[field]; 
+
+    return undefined;
   };
 
   const loadProductData = useCallback(async (mountedRef: { current: boolean }) => {
@@ -487,7 +507,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                 ...initialAiAnalysis,
                 calorie_estimation_type: 'breakdown',
                 ingredients_breakdown: savedIngredients,
-                calories_estimate: `Totale: ~${totalCal} kcal`
+                calories_estimate: `Calorie stimate: ${totalCal} kcal`
               };
               setAiAnalysis(initialAiAnalysis);
             }
@@ -785,7 +805,8 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         id: `default_${Date.now()}`,
         name: productName,
         estimated_weight_g: estimatedWeight,
-        estimated_calories_kcal: estimatedCalories || 65 // Se non abbiamo calorie, usiamo un valore predefinito
+        estimated_calories_kcal: estimatedCalories || 65, // Se non abbiamo calorie, usiamo un valore predefinito
+        quantity: 1 // Default a 1
       };
       
       // Imposta l'ingrediente e il totale calorie
@@ -803,18 +824,41 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       
       logCalories('Inizializzazione editableIngredients da aiAnalysis.ingredients_breakdown', aiAnalysis.ingredients_breakdown);
       
-      // Imposta gli ingredienti esistenti
-      setEditableIngredients(aiAnalysis.ingredients_breakdown);
+      // NUOVO: Raggruppamento ingredienti identici
+      const ingredientMap = new Map<string, EstimatedIngredient>();
       
-      // Calcola il totale delle calorie
-      const totalCal = aiAnalysis.ingredients_breakdown.reduce(
-        (acc, ing) => acc + ing.estimated_calories_kcal, 0
+      aiAnalysis.ingredients_breakdown.forEach(ing => {
+        // Normalizza il nome (minuscolo, trim)
+        const normalizedName = ing.name.toLowerCase().trim();
+        
+        if (ingredientMap.has(normalizedName)) {
+          // Se l'ingrediente esiste già, aumenta la quantità
+          const existingIng = ingredientMap.get(normalizedName)!;
+          existingIng.quantity = (existingIng.quantity || 1) + 1;
+        } else {
+          // Se è un nuovo ingrediente, aggiungilo alla mappa con quantity=1
+          ingredientMap.set(normalizedName, {
+            ...ing,
+            quantity: ing.quantity || 1
+          });
+        }
+      });
+      
+      // Converti la mappa in array
+      const groupedIngredients = Array.from(ingredientMap.values());
+      
+      // Imposta gli ingredienti raggruppati
+      setEditableIngredients(groupedIngredients);
+      
+      // Calcola il totale delle calorie considerando le quantità
+      const totalCal = groupedIngredients.reduce(
+        (acc, ing) => acc + (ing.estimated_calories_kcal * (ing.quantity || 1)), 0
       );
       setTotalEstimatedCalories(totalCal);
       logCalories('Somma calorie iniziali calcolata:', totalCal);
       
       // Salva una copia per ricalcoli
-      originalIngredientsBreakdownRef.current = aiAnalysis.ingredients_breakdown.map(ing => ({...ing}));
+      originalIngredientsBreakdownRef.current = groupedIngredients.map(ing => ({...ing}));
     }
   }, [aiAnalysis, editableIngredients, displayProductInfo]);
 
@@ -876,7 +920,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     }
   }
 
-  const getScoreColorForIcon = (grade: string | undefined | null, type: 'nutri' | 'eco', numericScore?: number | undefined | null) => {
+  const getScoreColorForIcon = (grade: string | undefined | null, type: 'nutri' | 'eco', numericScore?: number | undefined | null): string => {
     // Priorità al grade letterale se disponibile e valido
     if (grade && typeof grade === 'string' && grade.toLowerCase() !== 'unknown') {
       if (type === 'nutri') {
@@ -904,13 +948,23 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     return getColorFromNumericScore(numericScore, colors);
   };
 
-  const hasNutritionData = () => {
+  // Nuova funzione per verificare se ci sono dati nutrizionali reali (non stimati)
+  const hasRealNutritionData = (): boolean => {
     if (!displayProductInfo) return false;
+    // Verifica se i valori nutrizionali provengono da OpenFoodFacts
+    // Controlliamo se almeno un campo nutrizionale ha un valore maggiore di zero
     const fieldsToCheck: Array<keyof ProductRecord | keyof NonNullable<RawProductData['nutriments']>> = [
         'energy_kcal_100g', 'fat_100g', 'saturated_fat_100g', 
         'carbohydrates_100g', 'sugars_100g', 'fiber_100g', 
         'proteins_100g', 'salt_100g'
     ];
+    
+    // Se il prodotto ha un campo che indica esplicitamente se i valori sono stimati, usalo
+    if ('has_estimated_nutrition' in displayProductInfo) {
+      return !(displayProductInfo as any).has_estimated_nutrition;
+    }
+    
+    // Altrimenti, controlla se ci sono valori nutrizionali
     for (const field of fieldsToCheck) {
         const value = getNutrimentValue(field);
         if (typeof value === 'number' && value > 0.01) {
@@ -918,54 +972,21 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         }
     }
     return false;
-  }
+  };
 
-  const renderNutritionTable = () => {
-    const nutritionFields: Array<{ label: string; key: keyof ProductRecord | keyof NonNullable<RawProductData['nutriments']>; unit: string }> = [
-      { label: "Energia", key: "energy_kcal_100g", unit: "kcal" }, // O energy_100g per kJ
-      { label: "Grassi", key: "fat_100g", unit: "g" },
-      { label: "di cui Saturi", key: "saturated_fat_100g", unit: "g" },
-      { label: "Carboidrati", key: "carbohydrates_100g", unit: "g" },
-      { label: "di cui Zuccheri", key: "sugars_100g", unit: "g" },
-      { label: "Fibre", key: "fiber_100g", unit: "g" },
-      { label: "Proteine", key: "proteins_100g", unit: "g" },
-      { label: "Sale", key: "salt_100g", unit: "g" },
-    ];
-
-    return (
-      <View style={styles.nutritionSection}>
-        <Text style={[styles.sectionTitle, { color: BORDER_COLOR, marginBottom: 15 }]}>Valori Nutrizionali (per 100g/100ml)</Text>
-        {nutritionFields.map(field => {
-          const value = getNutrimentValue(field.key);
-          if (value === undefined || value === null) return null; // Non mostrare la riga se il valore non è disponibile
-          
-          return (
-            <View key={field.key} style={styles.nutritionDataRow}>
-              {/* Icon Pill */}
-              <View style={styles.iconPillWrapper}>
-                <View style={styles.iconPillShadow} />
-                <View style={styles.iconPillContainer}>
-                  <Ionicons 
-                    name={getNutrientIconName(field.key) as any} 
-                    size={24} 
-                    color={getNutrientIconColor(field.key)} 
-                  />
-                </View>
-              </View>
-
-              {/* Value Pill */}
-              <View style={styles.valuePillWrapper}>
-                <View style={styles.valuePillShadow} />
-                <View style={styles.valuePillContainer}>
-                  <Text style={styles.nutrientNameText}>{field.label}</Text>
-                  <Text style={styles.nutrientValueText}>{formatNutritionValue(value as number, field.unit)}</Text>
-                </View>
-              </View>
-            </View>
-          );
-        })}
-      </View>
-    );
+  // Funzione helper per verificare se ci sono dati nutrizionali significativi da mostrare
+  const hasNutritionData = (): boolean => {
+    // Se ci sono dati reali, restituisci true
+    if (hasRealNutritionData()) return true;
+    
+    // Se è un'analisi foto, considera che abbiamo sempre dati nutrizionali da mostrare
+    if (isCurrentProductFromPhotoAnalysis) return true;
+    
+    // Se abbiamo un aiAnalysis con healthScore, consideriamo che l'AI possa stimare i valori
+    if (aiAnalysis?.healthScore !== undefined) return true;
+    
+    // Altrimenti, non abbiamo dati nutrizionali
+    return false;
   };
 
   // --- MODIFICA renderAiDetailSection --- 
@@ -973,7 +994,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     sectionTitle: string, 
     items: Array<{ title: string; detail?: string } | ScoreItem>, // Accetta anche ScoreItem
     category: 'health' | 'sustainability' | 'neutral' // Aggiunta categoria neutral
-  ) => {
+  ): React.ReactNode => {
     if (!Array.isArray(items) || items.length === 0) return null;
 
     // Determina lo stile del blocco se necessario (ma lo rimuoviamo)
@@ -985,7 +1006,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       <View style={styles.itemListContainer}> 
         {sectionTitle && <Text style={styles.aiSectionTitleAlt}>{sectionTitle}</Text>} {/* Titolo opzionale per sezione */} 
         {items.map((itemData, index) => {
-          const isScoreItem = typeof itemData === 'object' && itemData !== null && 'classification' in itemData; // Check più robusto per ScoreItem
+          const isScoreItem = typeof itemData === 'object' && itemData !== null && 'classification' in itemData && 'scoreType' in itemData; // Check più robusto per ScoreItem
           const key = isScoreItem ? (itemData as ScoreItem).id : `${category}-item-${index}`;
           const isExpanded = expandedItems[key] || false;
 
@@ -1147,6 +1168,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       backgroundColor: colors.border,
       position: 'relative',
       zIndex: 1,
+      resizeMode: 'cover', // Cambiato da 'contain' a 'cover' per riempire lo spazio
     },
     productImagePlaceholderInCard: {
         width: '100%',
@@ -1225,6 +1247,10 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     nutritionSection: {
       paddingVertical: 15,
       paddingHorizontal: 0,
+    },
+    nutritionPortionSection: {
+      marginTop: 15,
+      marginBottom: 30,
     },
     sectionTitle: {
       fontSize: 18,
@@ -1404,10 +1430,9 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         borderRadius: 15,
         position: 'absolute',
         top: SHADOW_OFFSET_VALUE,
-        left: SHADOW_OFFSET_VALUE,
-        width: '100%',
-        height: '100%', 
-        zIndex: 0,
+        fontWeight: '600',
+        color: BORDER_COLOR,
+        textAlign: 'center',
     },
     labelButtonShadowReduced: {
         backgroundColor: BORDER_COLOR,
@@ -1519,25 +1544,6 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       borderRadius: 12,
       position: 'absolute',
       top: SHADOW_OFFSET_VALUE,
-      left: SHADOW_OFFSET_VALUE,
-      width: '100%',
-      height: '100%',
-      zIndex: 0,
-    },
-    portionButtonContainer: {
-      backgroundColor: CARD_BACKGROUND_COLOR,
-      borderRadius: 12,
-      borderWidth: CARD_BORDER_WIDTH,
-      borderColor: BORDER_COLOR,
-      paddingVertical: 12,
-      paddingHorizontal: 15,
-      justifyContent: 'center',
-      alignItems: 'center',
-      position: 'relative',
-      zIndex: 1,
-    },
-    portionButtonText: {
-      fontSize: 16,
       fontWeight: '600',
       color: BORDER_COLOR,
       textAlign: 'center',
@@ -1557,16 +1563,16 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       backgroundColor: BORDER_COLOR,
       borderRadius: PILL_BORDER_RADIUS,
       position: 'absolute',
-      top: SHADOW_OFFSET_VALUE,
-      left: SHADOW_OFFSET_VALUE,
+      top: PILL_SHADOW_OFFSET,
+      left: PILL_SHADOW_OFFSET,
       width: '100%',
       height: '100%',
       zIndex: 0,
     },
     portionIconPillContainer: {
-      backgroundColor: CARD_BACKGROUND_COLOR,
+      backgroundColor: '#FFA07A', // Colore originale della fiamma come sfondo
       borderRadius: PILL_BORDER_RADIUS,
-      borderWidth: CARD_BORDER_WIDTH,
+      borderWidth: PILL_BORDER_WIDTH,
       borderColor: BORDER_COLOR,
       width: '100%',
       height: '100%',
@@ -1584,8 +1590,8 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       backgroundColor: BORDER_COLOR,
       borderRadius: PILL_BORDER_RADIUS,
       position: 'absolute',
-      top: SHADOW_OFFSET_VALUE,
-      left: SHADOW_OFFSET_VALUE,
+      top: PILL_SHADOW_OFFSET,
+      left: PILL_SHADOW_OFFSET,
       width: '100%',
       height: '100%',
       zIndex: 0,
@@ -1593,7 +1599,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     portionValuePillContainer: {
       backgroundColor: CARD_BACKGROUND_COLOR,
       borderRadius: PILL_BORDER_RADIUS,
-      borderWidth: CARD_BORDER_WIDTH,
+      borderWidth: PILL_BORDER_WIDTH,
       borderColor: BORDER_COLOR,
       width: '100%',
       height: '100%',
@@ -1654,46 +1660,13 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       flex: 1,
     },
     saveIngredientsButton: {
-      backgroundColor: colors.primaryFaded, // Sfondo tenue come Aggiungi componente
-      paddingVertical: 10,
-      paddingHorizontal: 15,
-      borderRadius: 8,
-      alignItems: 'center',
-      justifyContent: 'center',
-      minWidth: 70,
-      marginLeft: 8,
-      borderWidth: 1,
-      borderColor: colors.primary, // Bordo con colore primario
-    },
-    undoChangesButton: {
-      backgroundColor: '#fff0f0', // Sfondo rosso tenue
-      paddingVertical: 10,
-      paddingHorizontal: 10,
-      borderRadius: 8,
-      alignItems: 'center',
-      justifyContent: 'center',
-      minWidth: 50,
-      borderWidth: 1,
-      borderColor: '#dc3545', // Bordo rosso
-    },
-    saveButtonDisabled: {
-      backgroundColor: colors.textMuted,
-      opacity: 0.7,
-    },
-    saveIngredientsButtonText: {
-      color: colors.primary,
-      fontWeight: '600',
-      fontFamily: 'BricolageGrotesque-SemiBold',
-    },
-    ingredientRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
+      backgroundColor: '#fff', // Sfondo bianco per la riga
       paddingVertical: 8,
-      paddingHorizontal: 12, // Aggiunto padding orizzontale
+      paddingHorizontal: 12,
+      borderRadius: 8,
+      // alignItems: 'center', // Rimosso per controllo più granulare
       borderBottomWidth: 1,
       borderBottomColor: '#eee',
-      backgroundColor: '#fff', // Sfondo bianco per la riga
     },
     ingredientName: {
       flex: 2.5, // Più spazio per il nome
@@ -1829,40 +1802,67 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       position: 'relative',
       zIndex: 1,
       overflow: 'hidden',
-      paddingHorizontal: 18, // Allineato con topCardContainer
+      paddingHorizontal: 18, // Ridotto padding orizzontale per allineamento con x1
       paddingBottom: 12, // Aumentato padding inferiore
     },
     ingredientNameText: {
       fontSize: 16,
       fontWeight: '600',
       color: BORDER_COLOR,
-      paddingHorizontal: 0, // Rimosso padding orizzontale
-      paddingTop: 21,
-      paddingBottom: 8, 
-      marginBottom: 5,
-      borderBottomWidth: 1,
-      borderBottomColor: '#e0e0e0',
       fontFamily: 'BricolageGrotesque-SemiBold',
+      flex: 1, // Aggiunto flex per gestire meglio lo spazio
     },
     ingredientDetailsRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      paddingHorizontal: 0, // Rimosso padding orizzontale
-      paddingVertical: 10, 
+      justifyContent: 'space-between',
+      paddingHorizontal: 0, 
+      paddingVertical: 5, // Ridotto da 10
+      width: '100%',
+    },
+    quantityIndicator: {
+      fontSize: 16, // Aumentato dimensione per uniformità col nome
+      color: BORDER_COLOR,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      marginRight: 8,
+    },
+    quantityInputInName: {
+      width: 30,
+      textAlign: 'center',
+      fontSize: 16,
+      color: BORDER_COLOR,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      marginRight: 8,
+      backgroundColor: 'transparent',
+      padding: 0,
+    },
+    quantityInputLabel: {
+      fontSize: 16,
+      color: BORDER_COLOR,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      marginRight: 2,
+    },
+    ingredientNameTextInput: {
+      fontSize: 16,
+      color: BORDER_COLOR,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      flex: 1,
+      borderBottomWidth: 1,
+      borderBottomColor: '#e0e0e0',
     },
     ingredientWeightText: {
-      fontSize: 15,
-      color: '#333',
-      fontFamily: 'BricolageGrotesque-Regular',
+      fontSize: 16,
+      color: BORDER_COLOR,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      minWidth: 30,
       textAlign: 'center',
-      marginRight: 8, // Più spazio prima della freccia
     },
     ingredientCaloriesText: {
       fontSize: 15,
-      color: '#333',
+      color: colors.textMuted,
       fontFamily: 'BricolageGrotesque-Regular',
-      marginLeft: 20, // Spazio a sinistra tra grammi e calorie
-      flex: 1,
+      marginLeft: 12,
+      marginRight: 'auto', // Push the trash icon to the right
     },
     ingredientDetailPill: {
       flexDirection: 'row',
@@ -1878,12 +1878,12 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       minHeight: 40,
     },
     ingredientWeightInput: {
-      // flex: 1, // Rimosso flex per controllo manuale
+      minWidth: 80,
+      maxWidth: 120,
       paddingVertical: 4, // Deve essere consistente con text sottostante se serve
       fontSize: 15,
       color: '#333',
       textAlign: 'right',
-      minWidth: 40, // Spazio minimo per input
     },
     ingredientUnit: {
       fontSize: 15,
@@ -1982,6 +1982,110 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       zIndex: 1,
       minHeight: 40, // Assicura altezza minima
       // Rimosso height: '100%' come richiesto
+    },
+    // Stili per la quantità e gli input degli ingredienti
+    quantityContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginRight: 10,
+    },
+    quantityText: {
+      fontSize: 15,
+      color: BORDER_COLOR,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+    },
+    quantityInput: {
+      width: 40,
+      textAlign: 'center',
+      fontSize: 15,
+      color: BORDER_COLOR,
+      fontFamily: 'BricolageGrotesque-Regular',
+      backgroundColor: 'transparent',
+      padding: 0,
+      minWidth: 30,
+    },
+    // Rinominato per evitare duplicati
+    quantityPrefixText: {
+      fontSize: 16,
+      color: '#FF9900', // Colore arancione
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      marginRight: 8,
+    },
+    quantityPrefixInput: {
+      width: 20, // Ridotta la larghezza per eliminare lo spazio
+      textAlign: 'left', // Allineato a sinistra invece che al centro
+      fontSize: 16,
+      color: '#FF9900', // Colore arancione
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      marginRight: 0, // Rimosso margine a destra
+      backgroundColor: 'transparent',
+      padding: 0,
+    },
+    quantityPrefixLabel: {
+      fontSize: 16,
+      color: '#FF9900', // Colore arancione
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      marginRight: 0, // Rimosso lo spazio tra "x" e il numero
+    },
+    ingredientNameInput: {
+      fontSize: 16,
+      color: BORDER_COLOR,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      flex: 1,
+    },
+    // Nuovi stili per input con container grigio
+    weightInputTouchable: {
+      minWidth: 80,
+      maxWidth: 120,
+      paddingVertical: 5,
+      paddingHorizontal: 0,
+      justifyContent: 'center',
+    },
+    weightInputContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 8,
+      paddingHorizontal: 8,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: '#e0e0e0',
+      backgroundColor: '#fff',
+      minHeight: 40,
+      justifyContent: 'center',
+    },
+    weightInputContainerFocused: {
+      backgroundColor: '#f8f8f8',
+      borderColor: colors.primary,
+      padding: 8,
+      borderRadius: 8,
+    },
+    weightDisplayContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: '100%',
+    },
+    nameInputContainer: {
+      flex: 1,
+      borderRadius: 6,
+    },
+    nameInputContainerFocused: {
+      backgroundColor: '#f0f0f0',
+      padding: 6,
+      borderRadius: 6,
+    },
+    infoText: {
+      fontSize: 12,
+      color: colors.textMuted,
+      textAlign: 'left',
+      marginTop: 4,
+      marginBottom: 2, // Spazio prima dei pulsanti
+      marginLeft: 5, // Aggiungiamo un po' di spazio a sinistra
+      fontFamily: 'BricolageGrotesque-Regular',
+    },
+    trashIconButton: {
+      padding: 8,
+      marginLeft: 5,
     },
   })
 
@@ -2248,12 +2352,15 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     ...(aiAnalysis?.pros ? parseJsonArrayField(aiAnalysis.pros).map(item => ({ ...item, classification: 'positive' as const })) : []),
     // Aggiungi gli ScoreItem positivi
     ...healthScoreItems.filter(item => item.classification === 'positive'),
-    // Aggiungi gli ScoreItem neutri e i pro/contro neutri standard (se mai ce ne fossero)
+    
+    // Aggiungi classification='neutral' ai neutrals standard
+    ...(aiAnalysis?.neutrals ? parseJsonArrayField(aiAnalysis.neutrals).map(item => ({ ...item, classification: 'neutral' as const })) : []),
+    // Aggiungi gli ScoreItem neutri
     ...healthNeutralItems,
-    // ...eventuali pro/contro neutri standard qui...
+    
     // Aggiungi gli ScoreItem negativi
     ...healthScoreItems.filter(item => item.classification === 'negative'),
-     // Aggiungi classification='negative' ai cons standard
+    // Aggiungi classification='negative' ai cons standard
     ...(aiAnalysis?.cons ? parseJsonArrayField(aiAnalysis.cons).map(item => ({ ...item, classification: 'negative' as const })) : []),
   ];
 
@@ -2261,14 +2368,17 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
   const allEcoItems = [
     // Aggiungi classification='positive' ai pro standard
     ...(aiAnalysis?.sustainabilityPros ? parseJsonArrayField(aiAnalysis.sustainabilityPros).map(item => ({ ...item, classification: 'positive' as const })) : []),
-     // Aggiungi gli ScoreItem positivi
+    // Aggiungi gli ScoreItem positivi
     ...sustainabilityScoreItems.filter(item => item.classification === 'positive'),
-    // Aggiungi gli ScoreItem neutri e i pro/contro neutri standard
+    
+    // Aggiungi classification='neutral' ai neutrals standard
+    ...(aiAnalysis?.sustainabilityNeutrals ? parseJsonArrayField(aiAnalysis.sustainabilityNeutrals).map(item => ({ ...item, classification: 'neutral' as const })) : []),
+    // Aggiungi gli ScoreItem neutri
     ...sustainabilityNeutralItems,
-    // ...eventuali pro/contro neutri standard qui...
-     // Aggiungi gli ScoreItem negativi
+    
+    // Aggiungi gli ScoreItem negativi
     ...sustainabilityScoreItems.filter(item => item.classification === 'negative'),
-     // Aggiungi classification='negative' ai cons standard
+    // Aggiungi classification='negative' ai cons standard
     ...(aiAnalysis?.sustainabilityCons ? parseJsonArrayField(aiAnalysis.sustainabilityCons).map(item => ({ ...item, classification: 'negative' as const })) : []),
   ];
 
@@ -2281,7 +2391,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     return (
         <View style={styles.itemListContainer}> 
             {items.map((itemData, index) => {
-                const isScoreItem = typeof itemData === 'object' && itemData !== null && 'classification' in itemData; // Raffinato check per ScoreItem
+                const isScoreItem = typeof itemData === 'object' && itemData !== null && 'classification' in itemData && 'scoreType' in itemData; // Raffinato check per ScoreItem
                 
                 let itemTitle = "";
                 let itemDetail: string | undefined = undefined; // Definizione di itemDetail spostata qui
@@ -2378,21 +2488,24 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
   };
 
   // *** INIZIO LOGICA EDITOR INGREDIENTI ***
-  const handleWeightChange = (ingredientId: string, newWeightText: string) => { // MODIFICA: Aggiunto tipo a newWeightText
+  const handleWeightChange = (ingredientId: string, newWeightText: string) => { 
     logCalories(`handleWeightChange: id=${ingredientId}, newWeightText=${newWeightText}`);
-    const newWeight = parseFloat(newWeightText.replace(',', '.')); // Gestisce sia virgola che punto
+    // Replace both comma and dot with dot for international number formatting
+    const newWeight = parseFloat(newWeightText.replace(',', '.'));
 
-    if (isNaN(newWeight) || newWeight < 0) {
-      logCalories("Peso non valido, non aggiorno");
-      // Potremmo voler mostrare un feedback all'utente qui
-      // Per ora, aggiorniamo solo se il peso inserito è valido, per non cancellare subito l'input errato
-      // e permettere all'utente di correggerlo. Il ricalcolo avverrà solo con pesi validi.
-      // Aggiorniamo l'ingrediente con il testo inserito per mantenere l'input utente visibile,
-      // ma senza ricalcolare le calorie se non è un numero valido.
-      setEditableIngredients(prevIngredients =>
-        prevIngredients?.map(ing => 
-          ing.id === ingredientId ? { ...ing, estimated_weight_g: newWeightText as any } : ing // Mantiene il testo per l'input
-        ) || null
+    // Validazione più gentile - ritorna se non è un numero ma non mostra alert
+    // Mostrerà alert solo quando l'utente finisce la modifica con un valore non valido
+    if (isNaN(newWeight)) {
+      return;
+    }
+    
+    // Validazione stretta solo per valori fuori intervallo consentito
+    if (newWeight <= 0 || newWeight > 999) {
+      logCalories("Peso non valido (<=0 o >999), non aggiorno e mostro alert.");
+      // Alert più amichevole
+      Alert.alert(
+        "Valore non valido", 
+        "Inserisci un peso tra 1 e 999 grammi."
       );
       return;
     }
@@ -2407,20 +2520,38 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
             const originalCalories = originalIngredient.estimated_calories_kcal;
             const originalWeight = originalIngredient.estimated_weight_g;
             const newCalculatedCalories = Math.round((originalCalories / originalWeight) * newWeight);
+            
+            // Calcola anche i nuovi valori nutrizionali proporzionalmente
+            const originalProteins = originalIngredient.estimated_proteins_g || 0;
+            const originalCarbs = originalIngredient.estimated_carbs_g || 0;
+            const originalFats = originalIngredient.estimated_fats_g || 0;
+            
+            const newCalculatedProteins = Number(((originalProteins / originalWeight) * newWeight).toFixed(1));
+            const newCalculatedCarbs = Number(((originalCarbs / originalWeight) * newWeight).toFixed(1));
+            const newCalculatedFats = Number(((originalFats / originalWeight) * newWeight).toFixed(1));
+            
             logCalories(`Ricalcolo per ${ing.name}: origKcal=${originalCalories}, origPeso=${originalWeight}, newPeso=${newWeight}, newKcal=${newCalculatedCalories}`);
-            return { ...ing, estimated_weight_g: newWeight, estimated_calories_kcal: newCalculatedCalories };
+            return { 
+              ...ing, 
+              estimated_weight_g: newWeight, 
+              estimated_calories_kcal: newCalculatedCalories, 
+              quantity: ing.quantity || 1,
+              estimated_proteins_g: newCalculatedProteins,
+              estimated_carbs_g: newCalculatedCarbs,
+              estimated_fats_g: newCalculatedFats
+            };
           } else {
             // Se non troviamo l'originale o il peso originale era 0, non possiamo ricalcolare proporzionalmente
             // Manteniamo le calorie originali o le impostiamo a 0 se non disponibili
             logCalories(`Impossibile ricalcolare proporzionalmente per ${ing.name}, peso originale 0 o non trovato.`);
-            return { ...ing, estimated_weight_g: newWeight, estimated_calories_kcal: ing.estimated_calories_kcal }; 
+            return { ...ing, estimated_weight_g: newWeight, estimated_calories_kcal: ing.estimated_calories_kcal, quantity: ing.quantity || 1 }; 
           }
         }
         return ing;
       });
 
       // Ricalcola il totale
-      const newTotal = updatedIngredients.reduce((acc, curr) => acc + curr.estimated_calories_kcal, 0);
+      const newTotal = updatedIngredients.reduce((acc, curr) => acc + (curr.estimated_calories_kcal * (curr.quantity || 1)), 0);
       logCalories("Nuovo totale calorie dopo cambio peso:", newTotal);
       setTotalEstimatedCalories(newTotal);
       // Imposta la flag di modifiche non salvate
@@ -2435,7 +2566,8 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       if (!prevIngredients) return null;
       const updatedIngredients = prevIngredients.filter(ing => ing.id !== ingredientId);
       
-      const newTotal = updatedIngredients.reduce((acc, curr) => acc + curr.estimated_calories_kcal, 0);
+      // Ricalcola il totale considerando la quantità
+      const newTotal = updatedIngredients.reduce((acc, curr) => acc + (curr.estimated_calories_kcal * (curr.quantity || 1)), 0);
       logCalories("Nuovo totale calorie dopo rimozione:", newTotal);
       setTotalEstimatedCalories(newTotal);
       // Imposta la flag di modifiche non salvate
@@ -2444,6 +2576,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     });
   };
 
+  // Modifico la funzione renderIngredientsEditor per migliorare il layout della card
   const renderIngredientsEditor = () => {
     // Determina se siamo in analisi foto o se abbiamo ingredienti carichi indipendentemente da aiAnalysis
     // LOGICA MIGLIORATA: Rendering avviene in questi casi:
@@ -2471,26 +2604,8 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         <View style={styles.ingredientsEditorHeader}>
           <Text style={styles.ingredientsEditorTitle}>Componenti del pasto</Text>
           <View style={{flexDirection: 'row'}}>
-            {hasUnsavedChanges && (
-              <>
-                <TouchableOpacity 
-                  style={styles.undoChangesButton} 
-                  onPress={handleUndoChanges}
-                >
-                  <Ionicons name="arrow-undo" size={20} color="#dc3545" />
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.saveIngredientsButton, isSavingIngredients && styles.saveButtonDisabled]} 
-                  onPress={handleSaveIngredients}
-                  disabled={isSavingIngredients}
-                >
-                  {isSavingIngredients ? (
-                    <ActivityIndicator size="small" color={colors.primary} />
-                  ) : (
-                    <Text style={styles.saveIngredientsButtonText}>Salva</Text>
-                  )}
-                </TouchableOpacity>
-              </>
+            {isSavingIngredients && (
+              <ActivityIndicator size="small" color={colors.primary} />
             )}
           </View>
         </View>
@@ -2500,24 +2615,73 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
           <View key={ingredient.id || `ing-${index}`} style={styles.ingredientCardWrapper}>
             <View style={styles.ingredientCardShadow} />
             <View style={styles.ingredientCardContainer}>
-              {/* Nome ingrediente nella prima riga */}
-              <Text style={styles.ingredientNameText}>{ingredient.name}</Text>
+              {/* Nome ingrediente con indicatore di quantità sulla stessa riga */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingBottom: 8, marginBottom: 5, paddingTop: 20 }}>
+
+                <Text style={styles.quantityPrefixText}>x{ingredient.quantity || 1}</Text>
+                <Text style={styles.ingredientNameText}>{ingredient.name}</Text>
+              </View>
               
               {/* Riga con grammi, kcal e pulsante elimina */}
               <View style={styles.ingredientDetailsRow}>
-                {/* Peso in grammi con freccia */}
-                <Text style={styles.ingredientWeightText}>
-                  {ingredient.estimated_weight_g.toString()} g
-                </Text>
-                <Ionicons name="chevron-down" size={14} color={colors.textMuted} style={{marginRight: 15}} />
-                
-                {/* Calorie (senza container) */}
-                <Text style={styles.ingredientCaloriesText}>~{Math.round(ingredient.estimated_calories_kcal)} kcal</Text>
+                <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                  {/* Peso in grammi con freccia - layout migliorato con gestione focus */}
+                  <TouchableOpacity 
+                    style={styles.weightInputTouchable}
+                    onPress={() => {
+                      setWeightInputFocused(ingredient.id);
+                      // Scorro alla posizione dell'input quando viene attivato
+                      scrollToActiveComponent(`weight-${ingredient.id}`);
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <View 
+                      style={[
+                        styles.weightInputContainer,
+                        weightInputFocused === ingredient.id && styles.weightInputContainerFocused
+                      ]}
+                      ref={(ref) => { 
+                        if (ref) {
+                          inputRefs.current[`weight-${ingredient.id}`] = ref;
+                        }
+                      }}
+                    >
+                      {weightInputFocused === ingredient.id ? (
+                        <TextInput
+                          style={styles.ingredientWeightText}
+                          value={ingredient.estimated_weight_g.toString()}
+                          onChangeText={(text) => handleWeightChange(ingredient.id, text)}
+                          keyboardType="numeric"
+                          autoFocus={true}
+                          onBlur={() => {
+                            setWeightInputFocused(null);
+                            // Auto-save when blurring the input field
+                            setTimeout(() => {
+                              if (hasUnsavedChanges) {
+                                handleSaveIngredients();
+                              }
+                            }, 500);
+                          }}
+                          selectTextOnFocus={true}
+                        />
+                      ) : (
+                        <View style={styles.weightDisplayContainer}>
+                          <Text style={styles.ingredientWeightText}>{ingredient.estimated_weight_g.toString()}</Text>
+                          <Text style={{color: colors.text, fontFamily: 'BricolageGrotesque-Regular', marginLeft: 1}}>g</Text>
+                          <Ionicons name="pencil-outline" size={14} color={colors.textMuted} style={{marginLeft: 4, marginRight: 0}} />
+                        </View>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                  
+                  {/* Calorie (senza container) */}
+                  <Text style={styles.ingredientCaloriesText}>~{Math.round(ingredient.estimated_calories_kcal)} kcal</Text>
+                </View>
                 
                 {/* Icona cestino semplice */}
                 <TouchableOpacity 
                   onPress={() => handleRemoveIngredient(ingredient.id)} 
-                  style={{ paddingHorizontal: 8, marginLeft: 15 }} // Ridotto padding orizzontale
+                  style={styles.trashIconButton}
                 >
                   <Ionicons name="trash" size={18} color="#dc3545" />
                 </TouchableOpacity>
@@ -2527,64 +2691,150 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         ))}
         
         {isAddingIngredient ? (
-          <View style={styles.ingredientCardWrapper}>
+          <View style={[styles.ingredientCardWrapper, {marginTop: 3}]}>
             <View style={styles.ingredientCardShadow} />
             <View style={styles.ingredientCardContainer}>
-              {/* Nome ingrediente come TextInput */}
-              <TextInput 
-                style={[styles.ingredientNameText]} 
-                placeholder="Nome componente"
-                value={newIngredientName}
-                onChangeText={setNewIngredientName}
-                placeholderTextColor={colors.textMuted}
-              />
-              
-              {/* Riga con grammi e kcal */}
-              <View style={styles.ingredientDetailsRow}>
-                {/* Campo grammi con freccia */}
-                <TextInput
-                  style={[styles.ingredientWeightText, {minWidth: 50}]}
-                  value={newIngredientWeight}
-                  onChangeText={setNewIngredientWeight}
-                  keyboardType="numeric"
-                  placeholder="Grammi"
-                  placeholderTextColor={colors.textMuted}
+              <View 
+                style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingTop: 16, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#eee', marginBottom: 16}}
+                ref={(ref) => { 
+                  if (ref) {
+                    inputRefs.current['new-ingredient-form'] = ref;
+                  }
+                }}
+              >
+                <Text style={{fontSize: 18, fontWeight: '600', color: BORDER_COLOR, fontFamily: 'BricolageGrotesque-Bold'}}>Nuovo componente</Text>
+                <TouchableOpacity 
+                  onPress={() => {
+                    setIsAddingIngredient(false);
+                    setNewIngredientName("");
+                    setNewIngredientWeight("");
+                    setNewIngredientQuantity("1");
+                  }}
+                  style={{padding: 4}}
+                >
+                  <Ionicons name="close" size={22} color={colors.textMuted} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Nome componente con hint chiaro */}
+              <View style={{marginBottom: 16}}>
+                <Text style={{fontSize: 14, color: colors.textMuted, marginBottom: 6, fontFamily: 'BricolageGrotesque-Regular'}}>Cosa aggiungi?</Text>
+                <TextInput 
+                  style={{
+                    borderWidth: 1,
+                    borderColor: '#ddd',
+                    borderRadius: 8,
+                    paddingHorizontal: 12,
+                    paddingVertical: 10,
+                    fontSize: 16,
+                    color: BORDER_COLOR,
+                    fontFamily: 'BricolageGrotesque-Regular',
+                    backgroundColor: '#fafafa'
+                  }}
+                  placeholder="es. Petto di pollo, insalata, mozzarella..."
+                  value={newIngredientName}
+                  onChangeText={setNewIngredientName}
+                  placeholderTextColor={'#aaa'}
+                  autoFocus={true}
+                  onFocus={() => scrollToActiveComponent('new-ingredient-form')}
                 />
-                <Text style={{color: '#333', fontFamily: 'BricolageGrotesque-Regular', marginRight: 8}}>g</Text>
-                <Ionicons name="chevron-down" size={14} color={colors.textMuted} style={{marginRight: 15}} />
-                
-                {/* kcal (senza container) */}
-                <Text style={styles.ingredientCaloriesText}>~0 kcal</Text>
               </View>
               
-              {/* Riga pulsanti Conferma/Annulla */}
-              <View style={{flexDirection: 'row', justifyContent: 'space-between', marginTop: 15}}>
-                <View style={{flex: 1, marginRight: 5}}>
-                  <TouchableOpacity 
-                    style={styles.saveIngredientsButton} 
-                    onPress={handleConfirmAddIngredient}
-                  >
-                    <Text style={[styles.saveIngredientsButtonText, {textAlign: 'center'}]}>Conferma</Text>
-                  </TouchableOpacity>
+              {/* Riga con quantità e peso */}
+              <View style={{flexDirection: 'row', marginBottom: 8}}>
+                {/* Quantità */}
+                <View style={{flex: 1}}>
+                  <Text style={{fontSize: 14, color: colors.textMuted, marginBottom: 6, fontFamily: 'BricolageGrotesque-Regular'}}>Quantità</Text>
+                  <View style={{flexDirection: 'row', borderWidth: 1, borderColor: '#ddd', borderRadius: 8, backgroundColor: '#fafafa', alignItems: 'center', overflow: 'hidden'}}>
+                    <TextInput
+                      style={{paddingHorizontal: 12, paddingVertical: 10, fontSize: 16, color: BORDER_COLOR, fontFamily: 'BricolageGrotesque-Regular', flex: 1}}
+                      value={newIngredientQuantity}
+                      onChangeText={setNewIngredientQuantity}
+                      keyboardType="numeric"
+                      placeholder="1"
+                      placeholderTextColor={'#aaa'}
+                      selectTextOnFocus={true}
+                      onFocus={() => scrollToActiveComponent('new-ingredient-form')}
+                    />
+                    <View style={{width: 36, borderLeftWidth: 1, borderLeftColor: '#ddd', height: '100%'}}>
+                      <TouchableOpacity 
+                        style={{alignItems: 'center', justifyContent: 'center', height: 20}}
+                        onPress={() => {
+                          const currentQty = parseInt(newIngredientQuantity || "1");
+                          setNewIngredientQuantity(Math.min(currentQty + 1, 99).toString());
+                        }}
+                      >
+                        <Ionicons name="chevron-up" size={16} color={BORDER_COLOR} />
+                      </TouchableOpacity>
+                      <TouchableOpacity 
+                        style={{alignItems: 'center', justifyContent: 'center', height: 20}}
+                        onPress={() => {
+                          const currentQty = parseInt(newIngredientQuantity || "1");
+                          if (currentQty > 1) {
+                            setNewIngredientQuantity((currentQty - 1).toString());
+                          }
+                        }}
+                      >
+                        <Ionicons name="chevron-down" size={16} color={BORDER_COLOR} />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
                 </View>
+
+                {/* Spazio tra i campi */}
+                <View style={{width: 20}} />
                 
-                <View style={{flex: 1, marginLeft: 5}}>
-                  <TouchableOpacity 
-                    style={styles.undoChangesButton} 
-                    onPress={() => {setIsAddingIngredient(false); setNewIngredientName(""); setNewIngredientWeight("");}}
-                  >
-                    <Text style={{color: '#dc3545', fontFamily: 'BricolageGrotesque-SemiBold', textAlign: 'center'}}>Annulla</Text>
-                  </TouchableOpacity>
+                {/* Peso */}
+                <View style={{flex: 1}}>
+                  <Text style={{fontSize: 14, color: colors.textMuted, marginBottom: 6, fontFamily: 'BricolageGrotesque-Regular'}}>Peso (g)</Text>
+                  <View style={{flexDirection: 'row', borderWidth: 1, borderColor: '#ddd', borderRadius: 8, backgroundColor: '#fafafa', alignItems: 'center', paddingHorizontal: 12}}>
+                    <TextInput
+                      style={{paddingVertical: 10, paddingRight: 4, fontSize: 16, color: BORDER_COLOR, fontFamily: 'BricolageGrotesque-Regular', flex: 1}}
+                      value={newIngredientWeight}
+                      onChangeText={setNewIngredientWeight}
+                      keyboardType="numeric"
+                      placeholder="100"
+                      placeholderTextColor={'#aaa'}
+                      selectTextOnFocus={true}
+                      onFocus={() => scrollToActiveComponent('new-ingredient-form')}
+                    />
+                    <Text style={{fontSize: 16, color: colors.textMuted, fontFamily: 'BricolageGrotesque-Regular'}}>g</Text>
+                  </View>
                 </View>
+              </View>
+              
+              {/* Suggerimento e avvertenza peso */}
+              <Text style={{fontSize: 13, color: colors.textMuted, fontFamily: 'BricolageGrotesque-Regular', marginBottom: 16}}>
+                Se non specifichi il peso, verrà stimata una porzione media
+              </Text>
+
+              {/* Pulsante aggiungi */}
+              <View style={{position: 'relative', marginBottom: 8}}>
+                <View style={{position: 'absolute', top: 3, left: 3, backgroundColor: BORDER_COLOR, width: '100%', height: '100%', borderRadius: 8, zIndex: 0}} />
+                <TouchableOpacity 
+                  style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary, borderRadius: 8, paddingVertical: 12, paddingHorizontal: 16, borderWidth: 1, borderColor: BORDER_COLOR, position: 'relative', zIndex: 1}}
+                  onPress={handleConfirmAddIngredient}
+                >
+                  <Ionicons name="checkmark-circle" size={22} color="#000" style={{marginRight: 8}} />
+                  <Text style={{color: '#fff', fontSize: 16, fontWeight: '600', fontFamily: 'BricolageGrotesque-SemiBold'}}>Aggiungi al pasto</Text>
+                </TouchableOpacity>
               </View>
             </View>
           </View>
         ) : (
-          <View style={styles.addIngredientPromptButtonContainer}>
-            {/* Rimosso <View style={styles.addIngredientPromptButtonShadow} /> */}
-            <TouchableOpacity style={styles.addIngredientPromptButton} onPress={() => setIsAddingIngredient(true)}>
-              <Ionicons name="add-circle-outline" size={24} color={colors.primary} style={{marginRight: 8}}/>
-              <Text style={styles.addIngredientPromptButtonText}>Aggiungi componente</Text>
+          <View style={{marginTop: 8, marginBottom: 8}}>
+            <TouchableOpacity 
+              style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderWidth: 2, borderStyle: 'dashed', borderColor: colors.primary, borderRadius: 12, backgroundColor: 'rgba(0, 123, 255, 0.05)'}}
+              onPress={() => {
+                setIsAddingIngredient(true);
+                // Usiamo la funzione scrollToActiveComponent per coerenza
+                setTimeout(() => {
+                  scrollToActiveComponent('new-ingredient-form');
+                }, 100);
+              }}
+            >
+              <Ionicons name="add-circle" size={24} color={colors.primary} style={{marginRight: 8}}/>
+              <Text style={{color: colors.primary, fontSize: 16, fontWeight: '600', fontFamily: 'BricolageGrotesque-SemiBold'}}>Aggiungi componente</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -2596,33 +2846,65 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
   // *** INIZIO LOGICA EDITOR INGREDIENTI ***
   const handleConfirmAddIngredient = async () => {
     const name = newIngredientName.trim();
-    const weight = parseFloat(newIngredientWeight.replace(',', '.'));
+    const weightString = newIngredientWeight.trim();
+    let weight = parseFloat(weightString.replace(',', '.'));
+    const quantity = parseInt(newIngredientQuantity || "1");
 
-    if (!name || isNaN(weight) || weight <= 0) {
-      Alert.alert("Input non valido", "Inserisci un nome e un peso validi per l'ingrediente.");
+    if (weightString && (isNaN(weight) || weight <= 0 || weight > 999)) {
+      Alert.alert("Peso non valido", "Il peso inserito deve essere maggiore di 0 e non superiore a 999 grammi. Lascia vuoto per una stima media.");
       return;
     }
-    setIsAddingIngredient(false); // Nasconde i campi di input
-    logCalories(`handleConfirmAddIngredient: name=${name}, weight=${weight}`);
-    setIsAiLoading(true); // Mostra un indicatore di caricamento globale
+    // Se il peso è vuoto o non un numero valido (ma non stringa vuota), l'AI userà una porzione media.
+    // Passiamo undefined a getCaloriesForSingleIngredientFromGemini se il peso non è valido o è vuoto.
+    const weightForAI = (weightString && !isNaN(weight) && weight > 0 && weight <= 999) ? weight : undefined;
+
+    if (!name || isNaN(quantity) || quantity < 1) {
+      Alert.alert("Input non valido", "Inserisci un nome e una quantità validi per l'ingrediente.");
+      return;
+    }
+    setIsAddingIngredient(false); 
+    logCalories(`handleConfirmAddIngredient: name=${name}, weightForAI=${weightForAI}, quantity=${quantity}`);
+    setIsAiLoading(true);
 
     try {
-      const calories = await getCaloriesForSingleIngredientFromGemini(name, weight);
-      if (calories !== null) {
+      // Chiamata alla funzione aggiornata che restituisce un oggetto SingleIngredientEstimateResponse
+      const aiResponse = await getCaloriesForSingleIngredientFromGemini(name, weightForAI);
+
+      if (aiResponse.error || aiResponse.calories === null) {
+        console.error("[ADD INGREDIENT AI ERROR]", aiResponse.errorMessage);
+        Alert.alert(
+          "Componente non registrato!", 
+          aiResponse.errorMessage || "L'AI non è riuscita a elaborare questo componente."
+        );
+      } else {
         const newId = `user_${Date.now()}`;
+        // Usa il nome corretto dall'AI, se disponibile, altrimenti il nome inserito dall'utente.
+        const finalName = aiResponse.correctedName || name;
+        // Il peso da salvare nell'oggetto ingrediente è quello che l'utente ha inserito (o 0 se lasciato vuoto per stima media).
+        // Se l'utente ha lasciato vuoto, l'AI ha stimato per una porzione media; dobbiamo decidere quale peso visualizzare.
+        // Per ora, usiamo il peso che l'AI avrebbe usato per la stima (se non specificato dall'utente, potrebbe essere un default o uno calcolato dall'AI).
+        // Questa parte potrebbe necessitare di ulteriore logica se l'AI restituisce anche il peso della porzione media usata.
+        // Ai fini del calcolo qui, usiamo il peso inserito dall'utente (o 0 se non inserito) perché le calorie sono già stimate per quel contesto.
+        const displayWeight = (weightString && !isNaN(weight) && weight > 0) ? weight : (aiResponse.calories && finalName ? 100 : 0); // Fallback a 100g se peso non dato ma calorie sì
+
         const newIngredient: EstimatedIngredient = {
           id: newId,
-          name: name,
-          estimated_weight_g: weight,
-          estimated_calories_kcal: calories,
+          name: finalName, // Nome corretto dall'AI
+          estimated_weight_g: displayWeight, // Peso inserito o stimato
+          estimated_calories_kcal: aiResponse.calories, // Calorie dall'AI
+          quantity: quantity,
+          // Aggiungi i nuovi valori nutrizionali
+          estimated_proteins_g: aiResponse.proteins || 0,
+          estimated_carbs_g: aiResponse.carbs || 0,
+          estimated_fats_g: aiResponse.fats || 0
         };
         setEditableIngredients(prevIngredients => [...(prevIngredients || []), newIngredient]);
-        setTotalEstimatedCalories(prevTotal => (prevTotal || 0) + calories);
-        logCalories("Nuovo ingrediente aggiunto e totale aggiornato", newIngredient);
-        // Imposta la flag di modifiche non salvate
+        setTotalEstimatedCalories(prevTotal => (prevTotal || 0) + (aiResponse.calories! * quantity));
+        logCalories("Nuovo ingrediente (AI processed) aggiunto e totale aggiornato", newIngredient);
         setHasUnsavedChanges(true);
-      } else {
-        Alert.alert("Errore", "Impossibile stimare le calorie per l'ingrediente aggiunto.");
+        setTimeout(() => {
+          handleSaveIngredients();
+        }, 100); 
       }
     } catch (error) {
       console.error("Errore durante l'aggiunta del nuovo ingrediente:", error);
@@ -2631,6 +2913,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       setIsAiLoading(false);
       setNewIngredientName("");
       setNewIngredientWeight("");
+      setNewIngredientQuantity("1");
     }
   };
 
@@ -2648,7 +2931,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     logCalories('Tentativo di salvataggio ingredienti:', editableIngredients);
     console.log('[SAVE DEBUG] Inizio salvataggio. ProductID:', productRecordId, 'UserID:', user.id);
     console.log('[SAVE DEBUG] Ingredienti da salvare:', JSON.stringify(editableIngredients));
-    const newCaloriesEstimateString = `Totale: ~${totalEstimatedCalories} kcal`;
+    const newCaloriesEstimateString = `Calorie stimate: ${totalEstimatedCalories} kcal`;
     console.log('[SAVE DEBUG] Stima calorie da salvare per la tabella products:', newCaloriesEstimateString);
 
     setIsSavingIngredients(true); // Mostra indicatore di caricamento sul pulsante
@@ -2729,8 +3012,8 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       const restoredIngredients = originalIngredientsBreakdownRef.current.map(ing => ({...ing}));
       setEditableIngredients(restoredIngredients);
       
-      // Ricalcola il totale
-      const totalCal = restoredIngredients.reduce((acc, ing) => acc + ing.estimated_calories_kcal, 0);
+      // Ricalcola il totale considerando la quantità
+      const totalCal = restoredIngredients.reduce((acc, ing) => acc + (ing.estimated_calories_kcal * (ing.quantity || 1)), 0);
       setTotalEstimatedCalories(totalCal);
       
       // Rimuovi la flag di modifiche non salvate
@@ -2741,10 +3024,206 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     }
   };
 
+  // Nuova funzione per gestire il cambio di quantità
+  const handleQuantityChange = (ingredientId: string, newQuantityText: string) => {
+    logCalories(`handleQuantityChange: id=${ingredientId}, newQuantityText=${newQuantityText}`);
+    const newQuantity = parseInt(newQuantityText);
+
+    if (isNaN(newQuantity) || newQuantity < 1) {
+      logCalories("Quantità non valida, non aggiorno");
+      return;
+    }
+
+    setEditableIngredients(prevIngredients => {
+      if (!prevIngredients) return null;
+
+      const updatedIngredients = prevIngredients.map(ing => {
+        if (ing.id === ingredientId) {
+          return { 
+            ...ing, 
+            quantity: newQuantity 
+          };
+        }
+        return ing;
+      });
+
+      // Ricalcola il totale considerando la quantità
+      const newTotal = updatedIngredients.reduce((acc, curr) => acc + (curr.estimated_calories_kcal * (curr.quantity || 1)), 0);
+      logCalories("Nuovo totale calorie dopo cambio quantità:", newTotal);
+      setTotalEstimatedCalories(newTotal);
+      // Imposta la flag di modifiche non salvate
+      setHasUnsavedChanges(true);
+      return updatedIngredients;
+    });
+  };
+
+  // Miglioro la funzione per calcolare lo scroll in modo più preciso
+  const scrollToActiveComponent = (elementId: string) => {
+    setTimeout(() => {
+      const targetElement = inputRefs.current[elementId];
+      const scrollViewElement = scrollViewRef.current;
+
+      if (targetElement && scrollViewElement) {
+        const targetNode = findNodeHandle(targetElement as any); // Usiamo 'as any' perché il tipo è complesso
+        const scrollViewNode = findNodeHandle(scrollViewElement);
+
+        if (targetNode && scrollViewNode) {
+          console.log(`Trovato elemento ${elementId} e ScrollView. Misurazione in corso...`);
+          
+          UIManager.measureLayout(
+            targetNode,
+            scrollViewNode,
+            () => { // RIMOSSO parametro 'error'
+              console.error("Errore durante la misurazione del layout (failure callback).");
+              // Fallback se la misurazione fallisce
+              scrollViewRef.current?.scrollTo({ y: 500, animated: true }); 
+            },
+            (left: number, top: number, width: number, height: number) => {
+              // 'top' è la posizione dell'elemento rispetto all'inizio dello ScrollView
+              // Vogliamo che questa 'top' sia a 150px dal bordo superiore della finestra
+              // Quindi, lo ScrollView deve scrollare fino a (top - 150)
+              const scrollPosition = Math.max(0, top - 350); 
+              
+              console.log(`Elemento ${elementId} si trova a ${top}px dall'inizio dello ScrollView. Scroll a ${scrollPosition}px.`);
+              
+              scrollViewRef.current?.scrollTo({
+                y: scrollPosition,
+                animated: true,
+              });
+            }
+          );
+        } else {
+          console.warn(`Impossibile ottenere i NodeHandle per l'elemento ${elementId} o lo ScrollView.`);
+          const fallbackScroll = elementId === 'new-ingredient-form' ? 550 : 400;
+          scrollViewRef.current?.scrollTo({ y: fallbackScroll, animated: true });
+        }
+      } else {
+        console.warn(`Impossibile trovare l'elemento ${elementId} o lo ScrollView per lo scroll.`);
+        const fallbackScroll = elementId === 'new-ingredient-form' ? 550 : 400;
+        scrollViewRef.current?.scrollTo({ y: fallbackScroll, animated: true });
+      }
+    }, 150); // Timeout leggermente aumentato per dare tempo alla UI di stabilizzarsi
+  };
+
+  // Verifica se ci sono raccomandazioni da visualizzare
+  const hasRecommendations = Array.isArray(aiAnalysis?.recommendations) && 
+                             aiAnalysis.recommendations.length > 0 &&
+                             aiAnalysis.recommendations.some(item => item && item.trim() !== '');
+                             
+  // Stessa cosa per le raccomandazioni ambientali
+  const hasSustainabilityRecommendations = Array.isArray(aiAnalysis?.sustainabilityRecommendations) && 
+                                           aiAnalysis.sustainabilityRecommendations.length > 0 &&
+                                           aiAnalysis.sustainabilityRecommendations.some(item => item && item.trim() !== '');
+
+  // Riaggiunta della funzione renderNutritionTable
+  const renderNutritionTable = (): React.ReactNode => {
+    // Determina se i valori sono stimati dall'AI o provengono da OpenFoodFacts
+    const isAiEstimated = !hasRealNutritionData() && (aiAnalysis?.healthScore !== undefined);
+    
+    // Determina se è un prodotto imbustato o un piatto/pasto
+    const isPackagedProduct = isCurrentProductFromPhotoAnalysis && !editableIngredients;
+    const isComposedMeal = isCurrentProductFromPhotoAnalysis && editableIngredients && editableIngredients.length > 0;
+    
+    // Seleziona il titolo appropriato
+    let tableTitle = "Valori Nutrizionali (per 100g/100ml)";
+    if (isAiEstimated && !isCurrentProductFromPhotoAnalysis) {
+      tableTitle = "Valori Nutrizionali (per 100g - Stime AI)";
+    } else if (isPackagedProduct) {
+      tableTitle = "Valori Nutrizionali per 100g (Stime AI)";
+    } else if (isComposedMeal) {
+      tableTitle = "Valori Nutrizionali del pasto (Stime AI)";
+    }
+    const nutritionFields: Array<{ label: string; key: keyof ProductRecord | keyof NonNullable<RawProductData['nutriments']>; unit: string }> = [
+      { label: "Energia", key: "energy_kcal_100g", unit: "kcal" }, // O energy_100g per kJ
+      { label: "Proteine", key: "proteins_100g", unit: "g" },
+      { label: "Carboidrati", key: "carbohydrates_100g", unit: "g" },
+      { label: "Grassi", key: "fat_100g", unit: "g" },
+    ];
+    
+    // Solo per dati reali da OpenFoodFacts, mostra tutti i campi nutrizionali
+    if (!isAiEstimated && !isCurrentProductFromPhotoAnalysis) {
+      nutritionFields.push(
+        { label: "di cui Saturi", key: "saturated_fat_100g", unit: "g" },
+        { label: "di cui Zuccheri", key: "sugars_100g", unit: "g" },
+        { label: "Fibre", key: "fiber_100g", unit: "g" },
+        { label: "Sale", key: "salt_100g", unit: "g" }
+      );
+    }
+
+    return (
+      <View style={styles.nutritionSection}>
+        <Text style={[styles.sectionTitle, { color: BORDER_COLOR, marginBottom: 15 }]}>{tableTitle}</Text>
+        {nutritionFields.map(field => {
+          let value;
+          
+          if (isComposedMeal && editableIngredients) {
+            // Per i pasti composti, calcoliamo la somma dai componenti
+            if (field.key === "energy_kcal_100g" && totalEstimatedCalories) {
+              // Per le calorie usiamo il totale già calcolato
+              value = totalEstimatedCalories;
+            } else {
+              // Per proteine, carboidrati e grassi, calcoliamo la somma
+              value = 0;
+              
+              if (field.key === "proteins_100g") {
+                // Somma delle proteine di tutti i componenti, considerando la quantità
+                value = editableIngredients.reduce((total, ing) => 
+                  total + ((ing.estimated_proteins_g || 0) * (ing.quantity || 1)), 0);
+              } else if (field.key === "carbohydrates_100g") {
+                // Somma dei carboidrati di tutti i componenti, considerando la quantità
+                value = editableIngredients.reduce((total, ing) => 
+                  total + ((ing.estimated_carbs_g || 0) * (ing.quantity || 1)), 0);
+              } else if (field.key === "fat_100g") {
+                // Somma dei grassi di tutti i componenti, considerando la quantità
+                value = editableIngredients.reduce((total, ing) => 
+                  total + ((ing.estimated_fats_g || 0) * (ing.quantity || 1)), 0);
+              }
+              
+              // Arrotonda a 1 decimale per i macronutrienti
+              if (value !== 0) {
+                value = Number(value.toFixed(1));
+              }
+            }
+          } else {
+            // Per altri prodotti, usa i valori esistenti o stimati
+            value = getNutrimentValue(field.key);
+          }
+          
+          if (value === undefined || value === null) return null; // Non mostrare la riga se il valore non è disponibile
+          
+          return (
+            <View key={field.key} style={styles.nutritionDataRow}>
+              {/* Icon Pill */}
+              <View style={styles.iconPillWrapper}>
+                <View style={styles.iconPillShadow} />
+                <View style={[styles.iconPillContainer, { backgroundColor: getNutrientIconColor(field.key) }]}>
+                  <Ionicons 
+                    name={getNutrientIconName(field.key) as any} 
+                    size={24} 
+                    color="#000000" 
+                  />
+                </View>
+              </View>
+
+              {/* Value Pill */}
+              <View style={styles.valuePillWrapper}>
+                <View style={styles.valuePillShadow} />
+                <View style={styles.valuePillContainer}>
+                  <Text style={styles.nutrientNameText}>{field.label}</Text>
+                  <Text style={styles.nutrientValueText}>{formatNutritionValue(value as number, field.unit)}</Text>
+                </View>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar style="dark" backgroundColor={BACKGROUND_COLOR} />
-      <ScrollView contentContainerStyle={styles.scrollViewContent}>
+      <ScrollView contentContainerStyle={styles.scrollViewContent} ref={scrollViewRef}>
         {/* <TouchableOpacity style={styles.backButton} onPress={() => navigationHook.goBack()}>
           <Ionicons name="arrow-back" size={28} color={BORDER_COLOR} />
         </TouchableOpacity> */}
@@ -2778,7 +3257,6 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                             <Image 
                                 source={{ uri: imageUrl }} 
                                 style={styles.productDisplayImage} 
-                                resizeMode="contain" 
                             />
         ) : (
                             <View style={styles.productImagePlaceholderInCard}>
@@ -2835,64 +3313,48 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
             </View>
       </View>
       
-        {displayPortionButton && portionCalories !== undefined && suggestedPortionGramsToShow !== undefined && (
-            <View style={styles.portionDetailRow}>
+        {/* SPOSTATA QUI: Tabella valori nutrizionali (solo per prodotti con barcode) */}
+        {/* Mostra tabella dei valori nutrizionali per tutti i tipi di prodotti */}
+        {hasNutritionData() && (
+          <View style={{marginTop: 20}}>
+            {renderNutritionTable()}
+          </View>
+        )}
+      
+        {/* Mostra le calorie stimate per prodotti analizzati tramite foto */}
+        {(() => {
+          logCalories(`RENDER - Calorie stimate: isCurrentProductFromPhotoAnalysis=${isCurrentProductFromPhotoAnalysis}, displayCaloriesEstimate=${displayCaloriesEstimate}, caloriesEstimate=${caloriesEstimate}`);
+          
+          // ✓ NUOVO: Mostra sempre la pillola se il prodotto è da analisi foto e abbiamo una stima
+          if (isCurrentProductFromPhotoAnalysis && displayCaloriesEstimate && caloriesEstimate) {
+            logCalories("RENDER - Mostro pillola calorie stimate");
+            return (
+              <View style={styles.portionDetailRow}>
                 <View style={styles.portionIconPillWrapper}>
-                    <View style={styles.portionIconPillShadow} />
-                    <View style={styles.portionIconPillContainer}>
-                        <Ionicons 
-                            name={'flame'} 
-                            size={24} 
-                            color={'#FFA07A'}
-                        />
-                    </View>
+                  <View style={styles.portionIconPillShadow} />
+                  <View style={styles.portionIconPillContainer}>
+                    <Ionicons 
+                      name={'flame'} 
+                      size={24} 
+                      color={'#000000'}
+                    />
+                  </View>
                 </View>
 
                 <View style={styles.portionValuePillWrapper}>
-                    <View style={styles.portionValuePillShadow} />
-                    <View style={styles.portionValuePillContainer}>
-                        <Text style={styles.portionValueText}>
-                            {`${portionCalories} kcal per porzione (${suggestedPortionGramsToShow}g)`}
-                        </Text>
-                    </View>
+                  <View style={styles.portionValuePillShadow} />
+                  <View style={styles.portionValuePillContainer}>
+                    <Text style={styles.portionValueText}>
+                      {`${caloriesEstimate}`}
+                    </Text>
+                  </View>
                 </View>
-            </View>
-        )}
-
-        {/* Mostra le calorie stimate per prodotti analizzati tramite foto */}
-        {(() => {
-            logCalories(`RENDER - Calorie stimate: isCurrentProductFromPhotoAnalysis=${isCurrentProductFromPhotoAnalysis}, displayCaloriesEstimate=${displayCaloriesEstimate}, caloriesEstimate=${caloriesEstimate}`);
-            
-            // ✓ NUOVO: Mostra sempre la pillola se il prodotto è da analisi foto e abbiamo una stima
-            if (isCurrentProductFromPhotoAnalysis && displayCaloriesEstimate && caloriesEstimate) {
-                logCalories("RENDER - Mostro pillola calorie stimate");
-                return (
-                    <View style={styles.portionDetailRow}>
-                        <View style={styles.portionIconPillWrapper}>
-                            <View style={styles.portionIconPillShadow} />
-                            <View style={styles.portionIconPillContainer}>
-                                <Ionicons 
-                                    name={'flame'} 
-                                    size={24} 
-                                    color={'#FFA07A'}
-                                />
-                            </View>
-                        </View>
-
-                        <View style={styles.portionValuePillWrapper}>
-                            <View style={styles.portionValuePillShadow} />
-                            <View style={styles.portionValuePillContainer}>
-                                <Text style={styles.portionValueText}>
-                                    {`${caloriesEstimate}`}
-                                </Text>
-                            </View>
-                        </View>
-                    </View>
-                );
-            } else {
-                logCalories("RENDER - NON mostro pillola calorie stimate");
-                return null;
-            }
+              </View>
+            );
+          } else {
+            logCalories("RENDER - NON mostro pillola calorie stimate");
+            return null;
+          }
         })()}
           
         {/* NUOVA POSIZIONE: Editor degli ingredienti subito dopo la pillola delle calorie */}
@@ -2901,58 +3363,52 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         {/* Sezione Analisi AI (Punteggi Salute/Eco 1-100 e dettagli) */}
         {showAiScores ? (
           <View style={styles.aiSectionWrapper}>
-                {/* Punteggio Salute Numerico */} 
-                {aiAnalysis.healthScore !== undefined && (
+            {/* Punteggio Salute Numerico */} 
+            {aiAnalysis.healthScore !== undefined && (
               <View style={{ marginBottom: 16 }}>
                 <Text style={styles.scoreSectionTitle}>Punteggio Salute</Text>
                 <View style={styles.scoreRowContainer}>
                   <View style={styles.numericScoreColumn}>
                     <View style={styles.scoreSquareCardWrapper}>
-                                    {/* UNIFORM SHADOW/BORDER */}
-                                    <View style={styles.scoreSquareCardShadow} /> 
-                                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(nutritionGrade, 'nutri', aiAnalysis.healthScore) }]}>
+                      {/* UNIFORM SHADOW/BORDER */}
+                      <View style={styles.scoreSquareCardShadow} /> 
+                      <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(nutritionGrade, 'nutri', aiAnalysis.healthScore) }]}>
                         <Text style={styles.scoreValueTextLarge}>{aiAnalysis.healthScore}</Text>
-        </View>
+                      </View>
                     </View>
                   </View>
                 </View>
               </View>
-                )}
+            )}
 
-                {/* Dettagli Salute: Lista unica */} 
-                {renderItemList(allHealthItems)}
-                
-                 {/* Punteggio Eco Numerico - NON MOSTRARE SE ANALISI FOTO */} 
-                {aiAnalysis.sustainabilityScore !== undefined && !isCurrentProductFromPhotoAnalysis && (
-                    <View style={{marginTop: 30, marginBottom: 16}}> 
+            {/* Dettagli Salute: Lista unica */} 
+            {renderItemList(allHealthItems)}
+            
+            {/* Punteggio Eco Numerico - NON MOSTRARE SE ANALISI FOTO */} 
+            {aiAnalysis.sustainabilityScore !== undefined && !isCurrentProductFromPhotoAnalysis && (
+              <View style={{marginTop: 30, marginBottom: 16}}> 
                 <Text style={styles.scoreSectionTitle}>Punteggio Eco</Text>
                 <View style={styles.scoreRowContainer}>
                   <View style={styles.numericScoreColumn}>
                     <View style={styles.scoreSquareCardWrapper}>
-                                     {/* UNIFORM SHADOW/BORDER */}
-                                    <View style={styles.scoreSquareCardShadow} /> 
-                                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(currentEcoScoreGrade, 'eco', aiAnalysis.sustainabilityScore) }]}> 
+                      {/* UNIFORM SHADOW/BORDER */}
+                      <View style={styles.scoreSquareCardShadow} /> 
+                      <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(currentEcoScoreGrade, 'eco', aiAnalysis.sustainabilityScore) }]}> 
                         <Text style={styles.scoreValueTextLarge}>{aiAnalysis.sustainabilityScore}</Text>
-            </View>
-                </View>
-          </View>
+                      </View>
+                    </View>
+                  </View>
                 </View>
               </View>
-                )}
+            )}
 
-                 {/* Dettagli Eco: Lista unica - NON MOSTRARE SE ANALISI FOTO */} 
-                {!isCurrentProductFromPhotoAnalysis && renderItemList(allEcoItems)}
+            {/* Dettagli Eco: Lista unica - NON MOSTRARE SE ANALISI FOTO */} 
+            {!isCurrentProductFromPhotoAnalysis && renderItemList(allEcoItems)}
           </View>
         ) : null}
 
-        {hasNutritionData() ? (
-          <View style={styles.nutritionSection}> 
-            {renderNutritionTable()} 
-          </View>
-        ) : null}
+        {/* RIMOSSO: Eliminata la sezione renderNutritionTable() che era qui */}
 
-        {/* RIMUOVO LA VECCHIA POSIZIONE DELL'EDITOR */}
-        
         {/* Sezione Punteggi Salute e Sostenibilità (condizionale per foto) */}
         <View style={styles.scoresRow}> 
           {/* Card Punteggio Salute */} 
@@ -2962,11 +3418,11 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               <View style={styles.scoreRowContainer}>
                 <View style={styles.numericScoreColumn}>
                   <View style={styles.scoreSquareCardWrapper}>
-                                    {/* UNIFORM SHADOW/BORDER */}
-                                    <View style={styles.scoreSquareCardShadow} /> 
-                                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(nutritionGrade, 'nutri', aiAnalysis.healthScore) }]}>
-                        <Text style={styles.scoreValueTextLarge}>{aiAnalysis.healthScore}</Text>
-        </View>
+                    {/* UNIFORM SHADOW/BORDER */}
+                    <View style={styles.scoreSquareCardShadow} /> 
+                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(nutritionGrade, 'nutri', aiAnalysis.healthScore) }]}>
+                      <Text style={styles.scoreValueTextLarge}>{aiAnalysis.healthScore}</Text>
+                    </View>
                   </View>
                 </View>
               </View>
@@ -2980,17 +3436,36 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               <View style={styles.scoreRowContainer}>
                 <View style={styles.numericScoreColumn}>
                   <View style={styles.scoreSquareCardWrapper}>
-                                     {/* UNIFORM SHADOW/BORDER */}
-                                    <View style={styles.scoreSquareCardShadow} /> 
-                                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(currentEcoScoreGrade, 'eco', aiAnalysis.sustainabilityScore) }]}> 
-                        <Text style={styles.scoreValueTextLarge}>{aiAnalysis.sustainabilityScore}</Text>
-            </View>
+                    {/* UNIFORM SHADOW/BORDER */}
+                    <View style={styles.scoreSquareCardShadow} /> 
+                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(currentEcoScoreGrade, 'eco', aiAnalysis.sustainabilityScore) }]}> 
+                      <Text style={styles.scoreValueTextLarge}>{aiAnalysis.sustainabilityScore}</Text>
+                    </View>
                   </View>
                 </View>
               </View>
             </View>
           )}
         </View>
+
+        {/* Raccomandazioni Salute e Sostenibilità (se presenti) */}
+        {hasRecommendations && (
+          <View style={{marginTop: 16, paddingHorizontal: 16}}>
+            <Text style={{fontSize: 18, fontWeight: '600', color: colors.text, marginBottom: 12, fontFamily: 'BricolageGrotesque-Bold'}}>
+              Consigli per migliorare
+            </Text>
+            {aiAnalysis?.recommendations.map((recommendation, index) => (
+              recommendation && recommendation.trim() !== '' && (
+                <View key={`recommendation-${index}`} style={{flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8}}>
+                  <View style={{width: 24, alignItems: 'center'}}>
+                    <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+                  </View>
+                  <Text style={{flex: 1, color: colors.text, fontSize: 15, fontFamily: 'BricolageGrotesque-Regular'}}>{recommendation}</Text>
+                </View>
+              )
+            ))}
+          </View>
+        )}
 
     </ScrollView>
     </View>

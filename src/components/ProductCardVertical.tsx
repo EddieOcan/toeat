@@ -44,7 +44,7 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
   }
 
   const getScoreColor = (score?: number) => {
-    if (!score) return isDark ? "#FFFFFF40" : "#21212140"
+    if (!score) return "#888888" // Grigio per ecoscore mancante
     if (score >= 80) return "#1E8F4E"
     if (score >= 60) return "#7AC547"
     if (score >= 40) return "#FFC734"

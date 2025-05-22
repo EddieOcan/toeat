@@ -14,6 +14,9 @@ export interface EstimatedIngredient {
   estimated_weight_g: number; // Peso stimato in grammi
   estimated_calories_kcal: number; // Calorie stimate per quel peso specifico
   quantity?: number; // Quantità dell'ingrediente (es. 2 kiwi)
+  estimated_proteins_g?: number; // Proteine stimate in grammi
+  estimated_carbs_g?: number; // Carboidrati stimati in grammi 
+  estimated_fats_g?: number; // Grassi stimati in grammi
 }
 
 export interface GeminiAnalysisResult {
@@ -22,10 +25,12 @@ export interface GeminiAnalysisResult {
   analysis: string // Analisi testuale (solo salute per analisi foto)
   pros: Array<{title: string, detail: string}> // Solo salute per analisi foto
   cons: Array<{title: string, detail: string}> // Solo salute per analisi foto
+  neutrals?: Array<{title: string, detail: string}> // Elementi neutrali/intermedi per la salute
   recommendations: string[] // Solo salute per analisi foto
   sustainabilityAnalysis: string // Vuoto o non presente per analisi foto
   sustainabilityPros: Array<{title: string, detail: string}> // Vuoto o non presente per analisi foto
   sustainabilityCons: Array<{title: string, detail: string}> // Vuoto o non presente per analisi foto
+  sustainabilityNeutrals?: Array<{title: string, detail: string}> // Elementi neutrali/intermedi per la sostenibilità
   sustainabilityRecommendations: string[] // Vuoto o non presente per analisi foto
   productNameFromVision?: string // Nome prodotto identificato da Gemini Vision (opzionale)
   brandFromVision?: string // Marca identificata da Gemini Vision (opzionale)
@@ -50,6 +55,9 @@ export interface SingleIngredientEstimateResponse {
   correctedName: string | null;
   error: boolean;
   errorMessage?: string;
+  proteins?: number | null; // Proteine stimate in grammi
+  carbs?: number | null; // Carboidrati stimati in grammi
+  fats?: number | null; // Grassi stimati in grammi
 }
 
 /**
@@ -157,142 +165,120 @@ const createAnalysisPrompt = (product: RawProductData): string => {
                              ? healthScoreRanges[nutriScore as keyof typeof healthScoreRanges] 
                              : healthScoreRanges.default;
 
+  // Determina se mancano i valori nutrizionali principali
+  const missingNutritionalInfo = !product.nutriments?.energy_kcal_100g && 
+                                !product.nutriments?.proteins_100g && 
+                                !product.nutriments?.carbohydrates_100g && 
+                                !product.nutriments?.fat_100g;
+  
+  // Aggiungi istruzioni speciali per generare stime nutrizionali se mancano
+  const estimateNutritionPrompt = missingNutritionalInfo ? `
+  IMPORTANTE: I valori nutrizionali per questo prodotto NON SONO DISPONIBILI nei dati di OpenFoodFacts.
+  
+  DEVI STIMARE i seguenti valori nutrizionali per 100g di prodotto, basandoti sul tuo database di conoscenze:
+  1. Calorie (kcal)
+  2. Proteine (g)
+  3. Carboidrati (g)
+  4. Grassi (g)
+  
+  Aggiungi questi valori nel tuo JSON di risposta usando i seguenti campi:
+  - "estimated_energy_kcal_100g": stima delle calorie per 100g (numero intero)
+  - "estimated_proteins_100g": stima delle proteine per 100g (numero con 1 decimale)
+  - "estimated_carbs_100g": stima dei carboidrati per 100g (numero con 1 decimale)
+  - "estimated_fats_100g": stima dei grassi per 100g (numero con 1 decimale)
+  
+  Queste stime dovranno essere utilizzate in assenza dei valori reali, quindi sii il più accurato possibile.
+  ` : '';
+  
   return `
-Analizza ATTENTAMENTE e SCRUPOLOSAMENTE il seguente prodotto alimentare per valutarne l'impatto sulla SALUTE. Fornisci una valutazione critica, concisa e DIRETTA.
+  Analizza questo prodotto alimentare basandoti sui dati di OpenFoodFacts e fornisci un'analisi nutrizionale e di sostenibilità.
+  
+  DATI DEL PRODOTTO:
+  Nome: ${formatField(product.product_name)}
+  Marca: ${formatField(product.brands)}
+  Categoria: ${formatField(product.categories)}
+  Ingredients: ${formatField(product.ingredients_text)}
+  Paese di vendita: ${formatField(product.countries)}
+  Nutri-Score: ${formatField(product.nutrition_grades)}
+  Eco-Score: ${formatField(product.ecoscore_grade)}
+  Nova Score: ${formatField(product.nova_group || 
+    (product.nutriments && 'nova_group' in product.nutriments ? product.nutriments.nova_group : undefined))}
+  
+  VALORI NUTRIZIONALI (per 100g/ml):
+  Energia: ${formatNutriment(product.nutriments?.energy_kcal_100g)} kcal / ${formatNutriment(product.nutriments?.energy_100g)} kJ
+  Grassi: ${formatNutriment(product.nutriments?.fat_100g)} g
+    di cui saturi: ${formatNutriment(product.nutriments?.saturated_fat_100g)} g
+  Carboidrati: ${formatNutriment(product.nutriments?.carbohydrates_100g)} g
+    di cui zuccheri: ${formatNutriment(product.nutriments?.sugars_100g)} g
+  Fibre: ${formatNutriment(product.nutriments?.fiber_100g)} g
+  Proteine: ${formatNutriment(product.nutriments?.proteins_100g)} g
+  Sale: ${formatNutriment(product.nutriments?.salt_100g)} g
+  
+  ${estimateNutritionPrompt}
+  
+  COMPITO:
+  1. ANALISI NUTRIZIONALE:
+     * Valuta la qualità nutrizionale complessiva con un punteggio da 0 a 100.
+     * Identifica aspetti nutrizionali positivi, negativi e neutri.
+     * Considera tutti i dati disponibili, inclusi gli ingredienti e i valori nutrizionali.
+     * Se il Nutri-Score è disponibile, utilizzalo come guida ma approfondisci oltre.
 
-OBIETTIVO PRINCIPALE: Fornire all'utente informazioni CHIARE, VERITIERE, ACCURATE, NON BANALI e UTILI per prendere decisioni consapevoli, in modo EFFICIENTE.
+  2. ANALISI DI SOSTENIBILITÀ AMBIENTALE:
+     * Valuta l'impatto ambientale complessivo con un punteggio da 0 a 100.
+     * Identifica aspetti ambientali positivi, negativi e neutri.
+     * Considera packaging, trasporto, origine degli ingredienti.
+     * Se l'Eco-Score è disponibile, utilizzalo come guida ma approfondisci oltre.
 
-ISTRUZIONI GENERALI IMPORTANTISSIME:
-1. **EVITA INFORMAZIONI OVVIE:** Mai dire cose che un utente medio già sa. Le persone cercano informazioni NUOVE e UTILI, non ovvie.
-2. **ADDITIVI - ANALISI DETTAGLIATA E INDIVIDUALE:** Per OGNI additivo presente (E-numbers), crea un punto critico nei CONTRO che spiega SPECIFICATAMENTE cosa fa quell'additivo, perché potrebbe essere problematico per la salute, e STUDI/RICERCHE che lo collegano a potenziali rischi. NON raggruppare gli additivi in un unico contro.
-3. **MAI CREARE CONTRO PER DATI MANCANTI:** Non creare MAI elementi di "origine sconosciuta", "dati insufficienti", "tracciabilità non chiara". Solo aspetti CONCRETI e REALI.
-4. **NON INCLUDERE CURIOSITÀ STORICHE O ANEDDOTI:** Concentrati SOLO su informazioni nutrizionali e di salute RILEVANTI e SPECIFICHE per il prodotto analizzato. NIENTE curiosità storiche, geografiche o aneddoti sulla categoria in generale.
-5. **NELLA DESCRIZIONE (analysis):** NON RIPETERE MAI il nome del prodotto. Inizia direttamente con gli aspetti nutrizionali. Sii CONCISO ma INFORMATIVO.
-6. **BASATI SUI DATI DISPONIBILI E FAI RICERCA:** Utilizza i dati forniti ma ANCHE la tua conoscenza. Se mancano informazioni, fai ipotesi ragionevoli basate sul tipo di prodotto.
-7. **OMETTI COMPLETAMENTE LA DESCRIZIONE AMBIENTALE:** Nella risposta JSON, il campo sustainabilityAnalysis sarà restituito VUOTO ("").
-8. **PUNTEGGI (0-100):** Usa l'INTERO range da 0 a 100.
-9. **ACQUA SEMPRE 100:** Se il prodotto è ACQUA (naturale, minerale, in bottiglia), ASSEGNA SEMPRE e SOLO un punteggio di 100 per la salute. Questo vale per qualsiasi tipo di acqua non aromatizzata.
-10. **PORZIONE CONSIGLIATA (suggestedPortionGrams):** Devi DETERMINARE e includere nel JSON una porzione consigliata realistica in grammi (SENZA l'unità 'g', solo il numero). Basati su:
-    a.  Il campo "Porzione consigliata" (serving_size) fornito nei dati, se presente e interpretabile in grammi (es. "30g", "2 biscotti (circa 25g)"). Se è vago (es. "un bicchiere"), ignoralo per questo scopo.
-    b.  Il tipo di prodotto (campo "Categorie Prodotto"). Esempi: yogurt monoporzione -> 125g; snack/biscotti -> 25-40g; bevanda -> 200-250g; pasta/riso secchi -> 70-80g; formaggio spalmabile -> 30g.
-    c.  Se i dati sono scarsi, fornisci una stima plausibile per la categoria di prodotto.
+  3. SUGGERIMENTI:
+     * Offri 2-3 consigli specifici per migliorare la qualità nutrizionale.
+     * Offri 2-3 consigli specifici per ridurre l'impatto ambientale.
 
-ISTRUZIONI CRITICHE LEGATE ALLE CATEGORIE DEI PRO/CONTRO:
-1. **SEPARAZIONE STRETTA TRA SALUTE E AMBIENTE:** I PRO e CONTRO della salute devono essere legati ESCLUSIVAMENTE a fattori nutrizionali e benefici/rischi fisiologici per il corpo umano. I PRO e CONTRO ambientali devono essere legati ESCLUSIVAMENTE a impatto ecologico, emissioni, riciclabilità, sostenibilità.
-2. **ALLERGENI NON SONO CONTRO:** MAI includere allergeni comuni o potenziali allergie come fattori negativi per la salute. Sono rilevanti solo per chi è allergico, non per la popolazione generale.
-3. **ELEMENTI IRRILEVANTI VIETATI:** MAI includere come PRO della salute fattori come "facilità di consumo", "sapore gradevole", "praticità", "veloce da preparare". Questi NON SONO fattori nutrizionali né rilevanti per la salute.
-4. **CERTIFICAZIONI PERTINENTI:** MAI includere nei PRO ambientali certificazioni che non hanno impatto ecologico (es. "senza lattosio", "senza glutine", "senza OGM") - questi sono fattori pertinenti solo alla salute, non all'ambiente.
-5. **TITOLI DEI PRO/CONTRO:** I titoli devono essere SEMPRE frasi complete e specifiche, MAI monosillabi o termini generici. Ad esempio, invece di "Fibre" scrivi "Elevato contenuto di fibre (Xg/100g)" includendo il valore numerico quando disponibile.
-6. **SPECIFICITÀ NEI TITOLI E DETTAGLI:** Basati sui valori numerici. Ad esempio, "Basso contenuto di grassi (2,5g/100g)" è meglio di "Basso contenuto di grassi".
-7. **PRIORITÀ SUI DATI DISPONIBILI:** Se mancano informazioni sull'origine o sull'impatto ambientale, RICERCA ATTIVAMENTE quali sono gli impatti tipici per quel tipo di prodotto e includi quelli senza mai menzionare la mancanza di dati.
+  FORMATO RISPOSTA (JSON):
+  {
+    "healthScore": [0-100],
+    "sustainabilityScore": [0-100],
+    "analysis": "[BREVE analisi nutrizionale in 1-2 frasi]",
+    "pros": [
+      {"title": "[TITOLO del punto positivo]", "detail": "[DETTAGLIO del punto positivo]"}
+    ],
+    "cons": [
+      {"title": "[TITOLO del punto negativo]", "detail": "[DETTAGLIO del punto negativo]"}
+    ],
+    "neutrals": [
+      {"title": "[TITOLO del punto neutro]", "detail": "[DETTAGLIO del punto neutro]"}
+    ],
+    "recommendations": ["[RACCOMANDAZIONE 1]", "[RACCOMANDAZIONE 2]", ...],
+    "sustainabilityAnalysis": "[BREVE analisi sostenibilità in 1-2 frasi]",
+    "sustainabilityPros": [
+      {"title": "[TITOLO del punto positivo]", "detail": "[DETTAGLIO del punto positivo]"}
+    ],
+    "sustainabilityCons": [
+      {"title": "[TITOLO del punto negativo]", "detail": "[DETTAGLIO del punto negativo]"}
+    ],
+    "sustainabilityNeutrals": [
+      {"title": "[TITOLO del punto neutro]", "detail": "[DETTAGLIO del punto neutro]"}
+    ],
+    "sustainabilityRecommendations": ["[RACCOMANDAZIONE 1]", "[RACCOMANDAZIONE 2]", ...],
+    "suggestedPortionGrams": [Peso in grammi della porzione suggerita (es. 30, 100, 250), o null se non determinabile],
+    "nutriScoreExplanation": "[Spiegazione del Nutri-Score se disponibile]",
+    "novaExplanation": "[Spiegazione del gruppo NOVA se disponibile]",
+    "ecoScoreExplanation": "[Spiegazione dell'Eco-Score se disponibile]"
+    ${missingNutritionalInfo ? `,
+    "estimated_energy_kcal_100g": [Stima calorie per 100g],
+    "estimated_proteins_100g": [Stima proteine per 100g],
+    "estimated_carbs_100g": [Stima carboidrati per 100g],
+    "estimated_fats_100g": [Stima grassi per 100g]` : ''}
+  }
 
-DATI DEL PRODOTTO (usa "Non disponibile" solo se il valore è effettivamente assente o vuoto):
-- Nome: ${formatField(product.product_name)}
-- Marca: ${formatField(product.brands)}
-- Ingredienti (con allergeni): ${formatField(product.ingredients_text_with_allergens || product.ingredients_text)}
-- Quantità: ${formatField(product.quantity)}
-- Porzione consigliata: ${formatField(product.serving_size)}
-- Allergeni (tag): ${formatField(product.allergens_tags)}
-- Tracce possibili: ${formatField(product.traces)}
-- Additivi (tag E-numbers): ${formatField(product.additives_tags)}
-- Gruppo NOVA (Processazione Alimenti): ${formatField(product.nova_group?.toString())} (1=non processato, 2=ingredienti culinari, 3=processato, 4=ultra-processato)
-- Paesi di vendita: ${formatField(product.countries)}
-- Nutri-Score: ${formatField(nutriScore)}
-- Eco-Score (Grado): ${formatField(product.ecoscore_grade?.toUpperCase())}
-- Eco-Score (Punteggio Numerico): ${product.ecoscore_score !== undefined ? product.ecoscore_score : "Non disponibile"}
-- Packaging (descrizione): ${formatField(product.packaging)}
-- Packaging (tag): ${formatField(product.packaging_tags)}
-- Impatto ambientale (livello tag): ${formatField(product.environmental_impact_level_tags)}
-- Categorie Prodotto: ${formatField(product.categories)}
-- Labels/Certificazioni (Biologico, FairTrade, ecc.): ${formatField(product.labels)}
-- Avvisi qualità dati OpenFoodFacts: ${formatField(product.data_quality_warnings_tags)}
-- Stato completezza dati OpenFoodFacts: ${formatField(product.states_tags)}
-${product.ecoscore_data ? `- Dettagli Strutturati Eco-Score: ${JSON.stringify(product.ecoscore_data)}` : ''}
-
-VALORI NUTRIZIONALI (per 100g o 100ml):
-- Energia (kcal): ${formatNutriment(product.nutriments?.energy_kcal_100g, "kcal")}
-- Grassi Totali: ${formatNutriment(product.nutriments?.fat_100g)}
-  - di cui Grassi Saturi: ${formatNutriment(product.nutriments?.saturated_fat_100g)}
-  - di cui Grassi Trans: ${formatNutriment(product.nutriments?.trans_fat_100g)}
-- Colesterolo: ${formatNutriment(product.nutriments?.cholesterol_100g, "mg")}
-- Carboidrati Totali: ${formatNutriment(product.nutriments?.carbohydrates_100g)}
-  - di cui Zuccheri: ${formatNutriment(product.nutriments?.sugars_100g)}
-- Fibre: ${formatNutriment(product.nutriments?.fiber_100g)}
-- Proteine: ${formatNutriment(product.nutriments?.proteins_100g)}
-- Sale: ${formatNutriment(product.nutriments?.salt_100g)} (Na x 2.5)
-- Sodio: ${formatNutriment(product.nutriments?.sodium_100g, "mg")}
-
-ISTRUZIONI SPECIFICHE PER IL PUNTEGGIO DI SALUTE (healthScore da 0 a 100):
-- REGOLA ASSOLUTA: Se il prodotto è ACQUA (in qualsiasi forma non aromatizzata, come si può dedurre dal nome "acqua"/"water" o dalla categoria), assegna SEMPRE un punteggio di 100 per la salute, senza eccezioni.
-- Se Nutri-Score disponibile (${formatField(nutriScore)}), usa come base la fascia: A(${healthScoreRanges.A.min}-${healthScoreRanges.A.max}), B(${healthScoreRanges.B.min}-${healthScoreRanges.B.max}), C(${healthScoreRanges.C.min}-${healthScoreRanges.C.max}), D(${healthScoreRanges.D.min}-${healthScoreRanges.D.max}), E(${healthScoreRanges.E.min}-${healthScoreRanges.E.max}).
-- Altrimenti, valuta da 0 a 100 basandoti su altri criteri.
-- Affina (o determina) il punteggio considerando CRITICAMENTE:
-  1. Ingredienti Problematici: Zuccheri, Sale/Sodio, Grassi Saturi/Trans.
-  2. Additivi: Valuta i tag E-numbers (ANALIZZA OGNI E-NUMBER SEPARATAMENTE).
-  3. Grado di Processazione (Gruppo NOVA): Penalizza NOVA 4, premia 1-2.
-  4. Qualità Nutrizionale: Fibre, Proteine, micronutrienti (se noti).
-
-ISTRUZIONI SPECIFICHE PER IL PUNTEGGIO DI SOSTENIBILITÀ (sustainabilityScore da 0 a 100):
-- Basa il punteggio su:
-    1. Eco-Score (Grado/Numerico).
-    2. Packaging (Materiali, Riciclabilità, tag).
-    3. Origine/Produzione (Località, Certificazioni Bio/FairTrade/MSC/etc.).
-    4. Tipo Prodotto (Impatto intrinseco es. carne vs vegetali).
-    5. Ingredienti Controversi (Olio di Palma non sostenibile).
-- IMPORTANTE: Nonostante dovrai calcolare questo punteggio per il campo JSON, la descrizione dell'analisi ambientale sarà vuota.
-- IGNORA COMPLETAMENTE l'Eco-Score "not-applicable" o "unknown" e NON includerlo nei pro/contro ambientali. Invece, cerca altri aspetti ambientali concreti da valutare per il prodotto.
-
-// ---> NUOVE ISTRUZIONI PER SPIEGAZIONI SCORE <--- 
-ISTRUZIONI AGGIUNTIVE PER LE SPIEGAZIONI DEGLI SCORE:
-1. **Nutri-Score Explanation:** Se un Nutri-Score (${formatField(nutriScore)}) è disponibile, genera una spiegazione INTERESSANTE e NON OVVIA (1-2 frasi) contestualizzata ai dati nutrizionali o agli ingredienti specifici di questo prodotto. Inserisci questa spiegazione nel campo JSON 'nutriScoreExplanation'.
-2. **NOVA Explanation:** Se un Gruppo NOVA (${formatField(novaScore)}) è disponibile, genera una spiegazione CHE VA OLTRE LA DEFINIZIONE STANDARD (1-2 frasi) con dettagli specifici sul processo di lavorazione o ingredienti tipici di questo prodotto. Inserisci questa spiegazione nel campo JSON 'novaExplanation'.
-3. **Eco-Score Explanation:** Se un Eco-Score (${formatField(ecoScore)}) è disponibile E NON È "not-applicable" o "unknown", genera una breve spiegazione (1-2 frasi) che rifletta l'impatto ambientale di questo specifico prodotto. Inserisci questa spiegazione nel campo JSON 'ecoScoreExplanation'.
-
-FORMATO DELLA RISPOSTA (SINGOLO OGGETTO JSON VALIDO, SENZA TESTO EXTRA PRIMA O DOPO):
-{
-  "healthScore": [Punteggio numerico INTERO 0-100 SALUTE, 100 se è un prodotto a base di ACQUA],
-  "sustainabilityScore": [Punteggio numerico INTERO 0-100 SOSTENIBILITÀ],
-  "analysis": "[NON INIZIARE MAI CON IL NOME DEL PRODOTTO! Descrizione concisa (2-3 FRASI al massimo) e chiara degli aspetti nutrizionali principali, particolarità e qualità nutrizionale generale. Fornisci informazioni ESSENZIALI, UTILI e NON OVVIE per l'utente.]",
-  "pros": [
-    {"title": "[TITOLO PRO SALUTE CON FRASE COMPLETA E DATO NUMERICO]", "detail": "[SPIEGAZIONE DETTAGLIATA (2-3 FRASI) che includa benefici specifici per la salute basati su ingredienti e valori nutrizionali concreti.]"}
-    // Generare altri pro salute significativi, utili e basati sui dati
-  ],
-  "cons": [
-    {"title": "[TITOLO CONTRO SALUTE CON FRASE COMPLETA E DATO SPECIFICO]", "detail": "[SPIEGAZIONE DETTAGLIATA (2-3 FRASI) dei rischi specifici. Se visibili additivi, spiegare dettagliatamente cosa fanno e i potenziali rischi.]"}
-    // Ogni additivo va analizzato SEPARATAMENTE con dettagli su cosa fa e rischi potenziali
-  ],
-  "recommendations": [
-    "[MASSIMO 2 RACCOMANDAZIONI PRATICHE, INTELLIGENTI, NON BANALI]"
-  ],
-  "sustainabilityAnalysis": "",
-  "sustainabilityPros": [
-     {"title": "[TITOLO PRO SOSTENIBILITÀ CON FRASE COMPLETA]", "detail": "[SPIEGAZIONE DETTAGLIATA (2-3 FRASI) con fatti specifici sull'aspetto positivo ambientale.]"}
-  ],
-  "sustainabilityCons": [
-    {"title": "[TITOLO CONTRO SOSTENIBILITÀ CON FRASE COMPLETA]", "detail": "[SPIEGAZIONE DETTAGLIATA (2-3 FRASI) con fatti specifici sull'aspetto negativo ambientale.]"}
-  ],
-  "sustainabilityRecommendations": [
-    "[MASSIMO 2 RACCOMANDAZIONI AMBIENTALI CONCRETE E SPECIFICHE]"
-  ],
-  "suggestedPortionGrams": [NUMERO INTERO della porzione consigliata in grammi],
-  "nutriScoreExplanation": "[SPIEGAZIONE CONTESTUALIZZATA e NON OVVIA SUL NUTRI-SCORE]",
-  "novaExplanation": "[SPIEGAZIONE CONTESTUALIZZATA e SPECIFICA SUL GRUPPO NOVA]",
-  "ecoScoreExplanation": "[SPIEGAZIONE CONTESTUALIZZATA SULL'ECO-SCORE, VUOTA SE NON APPLICABILE]"
-}
-
-ISTRUZIONI FINALI:
-1. Ogni titolo di PRO/CONTRO deve essere una FRASE COMPLETA e contenere dati specifici quando disponibili.
-2. NON ripetere il nome del prodotto nel campo "analysis".
-3. Per OGNI additivo (E-number) presente, crea un CONTRO separato che ne spiega rischi specifici e scopo.
-4. NON creare MAI contro del tipo "origine sconosciuta", "dati mancanti", ecc.
-5. MANTIENI IL CAMPO "sustainabilityAnalysis" VUOTO ("") ma compila gli altri campi eco.
-6. NON includere curiosità storiche o aneddoti che non siano direttamente rilevanti per il valore nutrizionale o la salute del consumatore.
-7. Se si tratta di acqua (nome o categoria contiene "acqua"/"water"), assegna SEMPRE un punteggio di salute di 100 e concentrati sui pro ambientali.
-8. Se mancano dati per un'analisi completa, fai sempre ricerca basata sul tipo di prodotto e non menzionare mai che "mancano dati" o che l'origine è "sconosciuta" - trova informazioni pertinenti.
-9. Ricorda che i PRO e CONTRO devono essere STRETTAMENTE pertinenti alla categoria (salute o ambiente), MAI mescolati.
-10. NON includere ALLERGENI come fattori negativi per la salute in nessun caso.
-11. Se l'Eco-Score è "not-applicable" o "unknown", NON menzionarlo MAI nei pro/contro e cerca altri aspetti ambientali.
-`;
+  RACCOMANDAZIONI GENERALI:
+  1. Sii PRECISO e CONCRETO, evita generalismi.
+  2. Fornisci un'analisi BILANCIATA, menzionando sia positivi che negativi quando possibile.
+  3. Basati sui DATI FORNITI, non inventare informazioni non presenti.
+  4. Quando possibile, confronta con RACCOMANDAZIONI UFFICIALI (es. OMS, linee guida nutrizionali).
+  5. Per prodotti con valori nutrizionali NON disponibili, fai STIME RAGIONEVOLI basate su prodotti simili.
+  6. Segui il formato JSON richiesto in modo PRECISO.
+  7. Le analisi e le spiegazioni devono essere in ITALIANO.
+  `;
 };
 
 /**
@@ -316,6 +302,15 @@ const parseGeminiResponse = (response: string, isPhotoAnalysis: boolean = false)
         Array.isArray(result.pros) &&
         Array.isArray(result.cons) &&
         Array.isArray(result.recommendations);
+
+      // Assicurati che i campi neutrals esistano (anche vuoti se non forniti dall'AI)
+      if (!Array.isArray(result.neutrals)) {
+        result.neutrals = [];
+      }
+      
+      if (!Array.isArray(result.sustainabilityNeutrals)) {
+        result.sustainabilityNeutrals = [];
+      }
 
       // Validazione campi calorie se è analisi foto
       let calorieFieldsValidForPhoto = true;
@@ -360,6 +355,7 @@ const parseGeminiResponse = (response: string, isPhotoAnalysis: boolean = false)
         result.sustainabilityAnalysis = "";
         result.sustainabilityPros = [];
         result.sustainabilityCons = [];
+        result.sustainabilityNeutrals = [];
         result.sustainabilityRecommendations = [];
         result.ecoScoreExplanation = "";
       } else {
@@ -418,7 +414,7 @@ const parseGeminiResponse = (response: string, isPhotoAnalysis: boolean = false)
             
             const titleUpper = item.title.toUpperCase();
             const detailUpper = item.detail ? item.detail.toUpperCase() : "";
-            
+
             // 1. Filtro per score che appaiono già nell'UI
             const titleMatchesScore = keywordsToFilterByTitle.some(keyword => 
               titleUpper.includes(keyword)
@@ -430,7 +426,7 @@ const parseGeminiResponse = (response: string, isPhotoAnalysis: boolean = false)
               (isSustainability ? titleUpper.match(/^ECO-SCORE:?\s*[A-E]$/) : false) || 
               titleUpper.match(/^NOVA:?\s*[1-4]$/) ||
               titleUpper.match(/^GRUPPO NOVA:?\s*[1-4]$/);
-            
+
             // 3. Filtro per dettagli che parlano principalmente dello score
             const detailMatchesScore = keywordsToFilterByDetail.some(keyword =>
               detailUpper.includes(keyword.toUpperCase())
@@ -481,12 +477,23 @@ const parseGeminiResponse = (response: string, isPhotoAnalysis: boolean = false)
         result.pros = filterItems(result.pros);
         result.cons = filterItems(result.cons);
         
+        // Filtra anche gli elementi neutrali
+        if (Array.isArray(result.neutrals)) {
+          result.neutrals = filterItems(result.neutrals);
+        }
+        
         if (!isPhotoAnalysis) {
             result.sustainabilityPros = filterItems(result.sustainabilityPros, true);
             result.sustainabilityCons = filterItems(result.sustainabilityCons, true);
+            
+            // Filtra anche gli elementi neutrali di sostenibilità
+            if (Array.isArray(result.sustainabilityNeutrals)) {
+              result.sustainabilityNeutrals = filterItems(result.sustainabilityNeutrals, true);
+            }
+            
             console.log('[GEMINI PARSE FILTER] Pro/Contro SOSTENIBILITÀ filtrati.');
         }
-        console.log('[GEMINI PARSE FILTER] Pro/Contro SALUTE filtrati.');
+        console.log('[GEMINI PARSE FILTER] Pro/Contro/Neutrali SALUTE filtrati.');
 
         // Validazione porzione suggerita come numero
         if (result.hasOwnProperty('suggestedPortionGrams') && typeof result.suggestedPortionGrams !== 'number') {
@@ -514,56 +521,35 @@ const parseGeminiResponse = (response: string, isPhotoAnalysis: boolean = false)
  * Crea un risultato di fallback se l'analisi della risposta fallisce
  */
 const createFallbackResult = (response: string, isPhotoAnalysisFallback: boolean = false): GeminiAnalysisResult => {
-  console.log(`[GEMINI FALLBACK] Creazione risultato di fallback. Da analisi foto: ${isPhotoAnalysisFallback}`)
-
-  const healthScoreMatch = response.match(/healthScore["\s:]+(\d+)/)
-  let healthScore = healthScoreMatch ? Number.parseInt(healthScoreMatch[1], 10) : 50
-  healthScore = Math.min(100, Math.max(1, healthScore));
-
-  // Controllo se si tratta di acqua (caso in cui dovremmo avere sempre 100 come punteggio)
-  // Anche nel fallback manteniamo la regola dell'acqua
-  const isWaterReference = response.toLowerCase().includes('acqua') || response.toLowerCase().includes('water') ||
-                         response.toLowerCase().includes('"productnamefromvision"\\s*:\\s*["\'].*?\\b(acqua|water)\\b');
+  console.log(`[GEMINI PARSE FALLBACK] Creazione risultato di fallback per risposta non conforme. Analisi foto: ${isPhotoAnalysisFallback}`);
   
-  if (isWaterReference) {
-    console.log('[GEMINI FALLBACK] Probabile riferimento ad acqua trovato, punteggio salute impostato a 100');
-    healthScore = 100;
-  }
-
-  let sustainabilityScore = 50; // Default per analisi non-foto
-  if (isPhotoAnalysisFallback) {
-    sustainabilityScore = 0; 
-  }
-  else {
-    const sustainabilityScoreMatch = response.match(/sustainabilityScore["\s:]+(\d+)/)
-    sustainabilityScore = sustainabilityScoreMatch ? Number.parseInt(sustainabilityScoreMatch[1], 10) : 50;
-    sustainabilityScore = Math.min(100, Math.max(1, sustainabilityScore));
+  // Estrai automaticamente alcune informazioni di base
+  let healthScore = 50; // Punteggio neutro di default
+  
+  // Cerca di estrarre il punteggio salute se presente nella risposta
+  const healthScoreMatch = response.match(/healthScore["\s:]+(\d+)/);
+  if (healthScoreMatch && healthScoreMatch[1]) {
+    const parsedScore = parseInt(healthScoreMatch[1], 10);
+    if (!isNaN(parsedScore) && parsedScore >= 0 && parsedScore <= 100) {
+      healthScore = parsedScore;
+    }
   }
   
-  console.log(`[GEMINI FALLBACK] Punteggi: Health=${healthScore}, Sustainability=${sustainabilityScore}`)
-
+  // Oggetto di base
   const fallbackResult: GeminiAnalysisResult = {
     healthScore: healthScore,
-    sustainabilityScore: sustainabilityScore,
-    analysis: "Non è stato possibile generare un'analisi dettagliata.",
-    pros: [{title: "Non disponibile", detail: "Informazioni non disponibili al momento."}],
-    cons: [{title: "Non disponibile", detail: "Informazioni non disponibili al momento."}],
-    recommendations: ["Riprova o consulta altre fonti."],
-    sustainabilityAnalysis: isPhotoAnalysisFallback ? "" : "Non è stato possibile generare un'analisi dettagliata della sostenibilità.",
-    sustainabilityPros: isPhotoAnalysisFallback ? [] : [{title: "Non disponibile", detail: "Non disponibile"}],
-    sustainabilityCons: isPhotoAnalysisFallback ? [] : [{title: "Non disponibile", detail: "Non disponibile"}],
-    sustainabilityRecommendations: isPhotoAnalysisFallback ? [] : ["Non disponibile"],
-    productNameFromVision: undefined,
-    brandFromVision: undefined,
-    suggestedPortionGrams: undefined, 
-    nutriScoreExplanation: undefined,
-    novaExplanation: undefined,
-    ecoScoreExplanation: isPhotoAnalysisFallback ? "" : undefined,
-    // Campi specifici per calorie foto
-    calorie_estimation_type: isPhotoAnalysisFallback ? 'per_100g' : undefined, 
-    ingredients_breakdown: isPhotoAnalysisFallback ? [] : undefined,
-    calories_estimate: isPhotoAnalysisFallback ? "~... kcal per 100g" : "Non disponibile" // Diverso fallback per non-foto
-  }
+    sustainabilityScore: isPhotoAnalysisFallback ? 0 : 50, 
+    analysis: "Non è stato possibile generare un'analisi dettagliata per questo prodotto. Verifica gli ingredienti e la tabella nutrizionale per maggiori informazioni.",
+    pros: [],
+    cons: [],
+    neutrals: [], // Aggiunto campo neutrals vuoto
+    recommendations: [],
+    sustainabilityAnalysis: isPhotoAnalysisFallback ? "" : "Non è stato possibile generare un'analisi ambientale dettagliata.",
+    sustainabilityPros: [],
+    sustainabilityCons: [],
+    sustainabilityNeutrals: [], // Aggiunto campo sustainabilityNeutrals vuoto
+    sustainabilityRecommendations: []
+  };
   
   // Ulteriore garanzia che i campi eco siano vuoti per fallback da analisi foto
   if (isPhotoAnalysisFallback) {
@@ -571,6 +557,7 @@ const createFallbackResult = (response: string, isPhotoAnalysisFallback: boolean
       fallbackResult.sustainabilityAnalysis = "";
       fallbackResult.sustainabilityPros = [];
       fallbackResult.sustainabilityCons = [];
+      fallbackResult.sustainabilityNeutrals = [];
       fallbackResult.sustainabilityRecommendations = [];
       fallbackResult.ecoScoreExplanation = "";
       // Assicuriamo i campi specifici calorie per foto in fallback
@@ -717,50 +704,29 @@ export const analyzeImageWithGeminiVision = async (
  */
 const createVisualAnalysisPrompt = (productNameHint: string): string => {
   return `
-Analizza ATTENTAMENTE l'immagine fornita di un prodotto alimentare.
+Mi viene mostrata un'immagine di cibo, piatto preparato o prodotto alimentare. Analizzane il contenuto per determinare:
 
-OBIETTIVO PRINCIPALE: Fornire una stima calorica e un'analisi della salubrità.
-NON FORNIRE ALCUNA ANALISI AMBIENTALE O PUNTEGGIO ECO.
+A) Se è un PIATTO COMPOSTO (es. pasta al ragù, insalata mista, pizza con topping) oppure un PRODOTTO CONFEZIONATO (es. pacchetto di pasta, barretta energetica, bottiglia d'acqua) oppure un ALIMENTO SINGOLO (es. mela, filetto di pesce).
 
-ISTRUZIONI FONDAMENTALI PER LA STIMA CALORICA:
-1.  **DISCERNI IL TIPO DI ALIMENTO:** Per una corretta classificazione:
-    *  **CASO A: PRODOTTO CONFEZIONATO/INDUSTRIALE SINGOLO** = SOLO prodotti CHIARAMENTE industriali in una confezione commerciale, come:
-       - Un pacchetto sigillato di biscotti
-       - Una scatola/lattina/bottiglia etichettata di prodotto commerciale
-       - Prodotti con marchio visibile e confezionamento industriale
-    
-    *  **CASO B: PIATTO COMPOSTO / ALIMENTI SFUSI** = TUTTI gli altri casi, specificamente:
-       - FRUTTA FRESCA singola (es. mela, kiwi, banana) anche se è un solo elemento
-       - VERDURA FRESCA singola (es. carota, pomodoro, patata) anche se è un solo elemento
-       - ALIMENTI NATURALI NON TRASFORMATI (es. uovo, pezzo di formaggio fresco)
-       - Piatti preparati con più ingredienti (es. pasta, insalata mista)
-       - Alimenti non chiaramente confezionati industrialmente
-       - TUTTO CIÒ CHE È NATURALE o fatto in casa
+B) Identifica con precisione: 
+   1. Il nome esatto del prodotto/piatto/alimento
+   2. Se è un prodotto confezionato, identifica il brand se visibile
+   3. Una valutazione nutrizionale da 0 a 100 punti, dove 100 è ottimale (es. acqua, frutta fresca, vegetali), 0 è pessima (es. snack ultra-processati)
 
-2.  **CASO A: PRODOTTO CONFEZIONATO/INDUSTRIALE SINGOLO:**
-    *   Identifica il nome e la marca, se possibile.
-    *   Imposta "calorie_estimation_type": "per_100g" (preferito) o "per_serving_packaged" (se la porzione della confezione è EVIDENTE e COMUNE, es. una piccola busta di patatine).
-    *   Fornisci la stima calorica in "calories_estimate" (es. "~480 kcal per 100g" o "~150 kcal per porzione (30g)").
-    *   Il campo "ingredients_breakdown" DEVE essere null o un array vuoto.
-    *   BASA la stima su una ricerca della tua conoscenza per prodotti simili se i dettagli non sono visibili.
+C) STIMA NUTRIZIONALE in base alla tipologia:
+   1. Se è un PIATTO COMPOSTO:
+      - Identifica e lista ogni componente separato con peso stimato in grammi e calorie approssimative.
+      - Per ogni componente, stima anche proteine (g), carboidrati (g) e grassi (g).
+      - Esempio: una pasta al pomodoro potrebbe avere 80g di pasta (280 kcal, 10g proteine, 56g carb, 1.5g grassi) e 120g di sugo (90 kcal, 2g proteine, 8g carb, 5g grassi).
+   
+   2. Se è un PRODOTTO CONFEZIONATO o ALIMENTO SINGOLO:
+      - Fornisci una stima per 100g del prodotto di: calorie (kcal), proteine (g), carboidrati (g) e grassi (g).
+      - Per alimenti singoli come frutta usa valori nutrizionali standard per 100g di quel prodotto.
 
-3.  **CASO B: PIATTO COMPOSTO / ALIMENTI SFUSI (COMPRESA FRUTTA E VERDURA SINGOLA):**
-    *   Imposta "calorie_estimation_type": "breakdown".
-    *   Identifica i COMPONENTI ALIMENTARI PRINCIPALI visibili (massimo 5-6 componenti per chiarezza).
-    *   Per OGNI componente, fornisci un oggetto nel campo array "ingredients_breakdown" con:
-        *   "id": Un identificatore testuale breve e univoco per l'ingrediente (es. "kiwi_fresco", "carota", "bistecca_manzo"). USA snake_case.
-        *   "name": Un nome descrittivo (es. "Kiwi", "Carota", "Bistecca di manzo").
-        *   "estimated_weight_g": La tua MIGLIORE STIMA del peso in grammi di quel componente, basandoti su porzioni standard e sull'aspetto visivo. Sii realistico.
-        *   "estimated_calories_kcal": La tua MIGLIORE STIMA delle calorie per il peso stimato di QUEL componente.
-    *   Nel campo "calories_estimate" (stringa), fornisci la SOMMA TOTALE delle "estimated_calories_kcal" di tutti i componenti identificati, formattata come: "Totale: ~[SOMMA] kcal". Esempio: "Totale: ~620 kcal".
-
-ISTRUZIONI CRITICHE PER L'ANALISI DELLA SALUTE:
-*   REGOLA ASSOLUTA ACQUA: Se l'immagine mostra acqua (in bottiglia, naturale, minerale o qualsiasi tipo non aromatizzato), assegna SEMPRE e SOLO un punteggio di salute di 100. Questo vale per qualsiasi prodotto che sia chiaramente acqua.
-*   PRO E CONTRO RILEVANTI: I PRO e CONTRO devono essere STRETTAMENTE legati a fattori nutrizionali e benefici/rischi per la salute.
+REGOLE DI ANALISI SALUTE:
+*   Considera POSITIVO per la salute: alimenti poco processati, freschi, ricchi di fibre/proteine/nutrienti, basso contenuto di zuccheri aggiunti/grassi saturi/sale.
+*   Considera NEGATIVO: alimenti ultra-processati, ricchi di zuccheri aggiunti, grassi saturi/trans, sale, coloranti, conservanti artificiali, additivi.
 *   ELEMENTI VIETATI NEI PRO: MAI includere come PRO della salute fattori come "facilità di consumo", "sapore gradevole", "praticità", "veloce da preparare". Questi NON SONO fattori nutrizionali.
-*   ALLERGENI NON SONO CONTRO: MAI includere allergeni o potenziali allergie come fattori negativi nei CONTRO.
-*   TITOLI ESPLICITI: I titoli devono essere FRASI COMPLETE, MAI termini singoli come "Fibre", "Proteine", "Sale". Usa invece "Buona fonte di fibre (Xg)", "Elevato apporto proteico (Xg)", "Basso contenuto di sale".
-*   SPECIFICITÀ: Includi SEMPRE una stima numerica nei titoli quando possibile, ad esempio "Basso contenuto di grassi (circa 2g/100g)" è meglio di "Basso contenuto di grassi".
 
 Nome del prodotto suggerito dall'utente (se utile per il contesto, ma non vincolante): ${productNameHint}
 
@@ -776,18 +742,21 @@ FORMATO RISPOSTA (SINGOLO OGGETTO JSON VALIDO, SENZA TESTO EXTRA PRIMA O DOPO):
   "cons": [
     {"title": "[TITOLO CONTRO SALUTE CON FRASE COMPLETA E DATO NUMERICO]", "detail": "[SPIEGAZIONE CAUTA RISCHI SALUTE (1-2 frasi)]"}
   ],
-  "recommendations": ["[1-2 RACCOMANDAZIONI PRATICHE SALUTE]"],
+  "neutrals": [
+    {"title": "[TITOLO NEUTRAL/INTERMEDIO SALUTE CON FRASE COMPLETA E DATO NUMERICO]", "detail": "[SPIEGAZIONE ASPETTI NEUTRALI O MISTI PER LA SALUTE (1-2 frasi)]"}
+  ],
+  "recommendations": [], // ARRAY VUOTO - NON FORNIRE RACCOMANDAZIONI
   "nutriScoreExplanation": "[EVENTUALE SPIEGAZIONE NUTRI-SCORE CONTESTUALIZZATA ALLA SALUTE]",
   "novaExplanation": "[EVENTUALE SPIEGAZIONE GRUPPO NOVA CONTESTUALIZZATA ALLA SALUTE]",
   
   "calorie_estimation_type": "[breakdown OR per_100g OR per_serving_packaged]",
   "ingredients_breakdown": [
-    // Esempio per "breakdown" di un singolo frutto (kiwi):
-    // {"id": "kiwi_fresco", "name": "Kiwi", "estimated_weight_g": 70, "estimated_calories_kcal": 45},
+    // Per "breakdown" di un piatto composto con più componenti:
+    // {"id": "pasta", "name": "Pasta", "estimated_weight_g": 80, "estimated_calories_kcal": 280, "estimated_proteins_g": 10, "estimated_carbs_g": 56, "estimated_fats_g": 1.5},
+    // {"id": "sugo", "name": "Sugo al pomodoro", "estimated_weight_g": 120, "estimated_calories_kcal": 90, "estimated_proteins_g": 2, "estimated_carbs_g": 8, "estimated_fats_g": 5}
     
-    // Esempio per "breakdown" di più componenti:
-    // {"id": "bistecca_manzo", "name": "Bistecca di manzo", "estimated_weight_g": 150, "estimated_calories_kcal": 280},
-    // {"id": "patate_forno", "name": "Patate al forno", "estimated_weight_g": 120, "estimated_calories_kcal": 150}
+    // Per "breakdown" di un singolo frutto o alimento:
+    // {"id": "kiwi_fresco", "name": "Kiwi", "estimated_weight_g": 70, "estimated_calories_kcal": 45, "estimated_proteins_g": 0.8, "estimated_carbs_g": 10.1, "estimated_fats_g": 0.4}
   ],
   "calories_estimate": "[STRINGA: Es. 'Totale: ~430 kcal' per breakdown, o '~450 kcal per 100g' per confezionato]",
   
@@ -796,6 +765,7 @@ FORMATO RISPOSTA (SINGOLO OGGETTO JSON VALIDO, SENZA TESTO EXTRA PRIMA O DOPO):
   "sustainabilityAnalysis": "",
   "sustainabilityPros": [],
   "sustainabilityCons": [],
+  "sustainabilityNeutrals": [],
   "sustainabilityRecommendations": [],
   "ecoScoreExplanation": ""
 }
@@ -812,11 +782,11 @@ ISTRUZIONI FINALI IMPORTANTISSIME:
 };
 
 /**
- * Stima le calorie per un singolo ingrediente e ne corregge il nome usando Gemini.
+ * Stima le calorie e i valori nutrizionali per un singolo ingrediente e ne corregge il nome usando Gemini.
  * Se weightGrams è 0 o non fornito, l'AI stimerà per una porzione media.
  * @param name Nome dell'ingrediente fornito dall'utente.
  * @param weightGrams Peso in grammi (opzionale, se 0 o undefined, l'AI stima una porzione media).
- * @returns Un oggetto SingleIngredientEstimateResponse.
+ * @returns Un oggetto SingleIngredientEstimateResponse con calorie e valori nutrizionali.
  */
 export const getCaloriesForSingleIngredientFromGemini = async (
   name: string,
@@ -826,28 +796,35 @@ export const getCaloriesForSingleIngredientFromGemini = async (
   try {
     const weightPrompt = (weightGrams && weightGrams > 0) ? 
       `per un peso di ${weightGrams} grammi` : 
-      `per una porzione media (se non riesci a stimare una porzione media specifica per questo ingrediente, considera un peso generico di 100g per la stima calorica).`;
+      `per una porzione media (se non riesci a stimare una porzione media specifica per questo ingrediente, considera un peso generico di 100g per la stima nutrizionale).`;
 
   const prompt = `
     Analizza il seguente ingrediente alimentare fornito dall'utente: "${name}".
 
-    Il tuo compito è duplice:
-    1.  **Correggi e Normalizza il Nome:** Se il nome fornito dall'utente ("${name}") sembra contenere errori di battitura, usa un case scorretto, o è una descrizione colloquiale, restituisci una versione corretta, normalizzata e più "ufficiale" del nome. Ad esempio, se l'utente scrive "toNNo in scatla", correggilo in "Tonno in scatola". Se il nome è già corretto e formale, restituiscilo così com'è. Il nome corretto deve essere singolare e specifico (es. "Mela Fuji" invece di "Mele").
-    2.  **Stima le Calorie (kcal):** Fornisci una stima numerica delle calorie (kcal) ${weightPrompt} per il nome CORRETTO dell'ingrediente.
+    Il tuo compito è:
+    1. **Correggi e Normalizza il Nome:** Se il nome fornito dall'utente ("${name}") sembra contenere errori di battitura, usa un case scorretto, o è una descrizione colloquiale, restituisci una versione corretta, normalizzata e più "ufficiale" del nome. Ad esempio, se l'utente scrive "toNNo in scatla", correggilo in "Tonno in scatola". Se il nome è già corretto e formale, restituiscilo così com'è. Il nome corretto deve essere singolare e specifico (es. "Mela Fuji" invece di "Mele").
+    
+    2. **Stima i Valori Nutrizionali** ${weightPrompt} per il nome CORRETTO dell'ingrediente:
+       - Calorie (kcal)
+       - Proteine (g)
+       - Carboidrati (g)
+       - Grassi (g)
 
     REGOLE IMPORTANTISSIME:
-    *   **ACQUA = 0 CALORIE:** Se l'ingrediente è acqua o acqua minerale naturale (non aromatizzata), assegna SEMPRE 0 calorie, indipendentemente dal peso.
-    *   **NOME TROPPO COMPLESSO/GENERICO:** Se il nome fornito è una descrizione di un piatto complesso (es. "Pasta al ragù della nonna con polpette") invece di un singolo ingrediente, o se è troppo generico per una stima calorica accurata (es. "Frutta"), NON tentare di stimare le calorie. In questo caso, indica chiaramente che il nome è troppo complesso o generico.
-    *   **STIMA 0 KCAL:** Se la tua stima calorica è 0 kcal per un ingrediente che dovrebbe ragionevolmente avere calorie (e NON è acqua), consideralo un errore di stima e indicalo.
-    *   **BASATI SU DATI REALI:** Utilizza dati nutrizionali reali e database standard per fare una stima accurata, non fare supposizioni generiche.
-    *   **INCLUDI SEMPRE CALORIE QUANDO POSSIBILE:** Per qualsiasi ingrediente alimentare riconoscibile, fai sempre del tuo meglio per fornire una stima calorica concreta, anche se approssimativa.
-    *   **FATTI GUIDARE DALLE TABELLE NUTRIZIONALI:** Basati sui valori medi per 100g di prodotto delle tabelle nutrizionali ufficiali e scala appropriatamente.
+    * **ACQUA = 0 CALORIE E VALORI NUTRIZIONALI:** Se l'ingrediente è acqua o acqua minerale naturale (non aromatizzata), assegna SEMPRE 0 a tutti i valori nutrizionali.
+    * **NOME TROPPO COMPLESSO/GENERICO:** Se il nome fornito è una descrizione di un piatto complesso o se è troppo generico per una stima nutrizionale accurata, indica chiaramente che il nome è troppo complesso o generico.
+    * **BASATI SU DATI REALI:** Utilizza dati nutrizionali reali e database standard per fare una stima accurata, non fare supposizioni generiche.
+    * **INCLUDI SEMPRE TUTTI I VALORI NUTRIZIONALI QUANDO POSSIBILE:** Per qualsiasi ingrediente alimentare riconoscibile, fai sempre del tuo meglio per fornire stime concrete per tutti i valori richiesti.
+    * **FATTI GUIDARE DALLE TABELLE NUTRIZIONALI:** Basati sui valori medi per 100g di prodotto delle tabelle nutrizionali ufficiali e scala appropriatamente.
 
     FORMATO DELLA RISPOSTA (DEVI RESTITUIRE ESATTAMENTE QUESTO FORMATO JSON, SENZA TESTO AGGIUNTIVO PRIMA O DOPO):
     {
       "corrected_name": "[Nome corretto e normalizzato dell'ingrediente]",
       "estimated_calories_kcal": [Numero intero di calorie stimate, 0 per acqua, o null se non stimabile],
-      "error_message": "[Eventuale messaggio di errore/motivazione se le calorie sono 0 (e NON è acqua), se il nome è troppo complesso/generico, o se la stima fallisce. Lascia vuoto se non ci sono errori.]"
+      "estimated_proteins_g": [Numero di grammi di proteine, con massimo 1 decimale, 0 per acqua, o null se non stimabile],
+      "estimated_carbs_g": [Numero di grammi di carboidrati, con massimo 1 decimale, 0 per acqua, o null se non stimabile],
+      "estimated_fats_g": [Numero di grammi di grassi, con massimo 1 decimale, 0 per acqua, o null se non stimabile],
+      "error_message": "[Eventuale messaggio di errore se la stima fallisce. Lascia vuoto se non ci sono errori.]"
     }
     `;
 
@@ -878,6 +855,9 @@ export const getCaloriesForSingleIngredientFromGemini = async (
         correctedName: null,
         error: true,
         errorMessage: `Errore API Gemini: ${errorData?.error?.message || 'Errore sconosciuto durante la chiamata API.'}`,
+        proteins: null,
+        carbs: null,
+        fats: null
       };
     }
 
@@ -903,7 +883,10 @@ export const getCaloriesForSingleIngredientFromGemini = async (
                     calories: null,
                     correctedName: name, // Restituisci il nome originale in caso di errore di parsing completo
                     error: true,
-                    errorMessage: "Formato risposta AI non valido."
+                    errorMessage: "Formato risposta AI non valido.",
+                    proteins: null,
+                    carbs: null,
+                    fats: null
                 };
             }
         }
@@ -914,7 +897,10 @@ export const getCaloriesForSingleIngredientFromGemini = async (
               calories: null, 
               correctedName: name, 
               error: true, 
-              errorMessage: parsedData.error?.message || "La risposta AI non contiene i dati richiesti." 
+              errorMessage: parsedData.error?.message || "La risposta AI non contiene i dati richiesti.",
+              proteins: null,
+              carbs: null,
+              fats: null
           };
       }
     } catch (e) {
@@ -923,19 +909,41 @@ export const getCaloriesForSingleIngredientFromGemini = async (
         calories: null,
         correctedName: name,
         error: true,
-        errorMessage: "Errore durante l'analisi della risposta JSON."
+        errorMessage: "Errore durante l'analisi della risposta JSON.",
+        proteins: null,
+        carbs: null,
+        fats: null
       };
     }
 
     // Se tutto è andato bene, estraiamo i dati pertinenti
     const correctedName = parsedData.corrected_name;
     const caloriesRaw = parsedData.estimated_calories_kcal;
+    const proteinsRaw = parsedData.estimated_proteins_g;
+    const carbsRaw = parsedData.estimated_carbs_g;
+    const fatsRaw = parsedData.estimated_fats_g;
     const errorMessage = parsedData.error_message;
 
-    // Valida le calorie
+    // Valida le calorie e i macronutrienti
     let calories: number | null = null;
+    let proteins: number | null = null;
+    let carbs: number | null = null;
+    let fats: number | null = null;
+
     if (typeof caloriesRaw === 'number') {
       calories = Math.max(0, Math.round(caloriesRaw)); // Assicura che sia almeno 0 e arrotondato all'intero
+    }
+    
+    if (typeof proteinsRaw === 'number') {
+      proteins = Math.max(0, Number(proteinsRaw.toFixed(1))); // Assicura che sia almeno 0 e con max 1 decimale
+    }
+    
+    if (typeof carbsRaw === 'number') {
+      carbs = Math.max(0, Number(carbsRaw.toFixed(1))); // Assicura che sia almeno 0 e con max 1 decimale
+    }
+    
+    if (typeof fatsRaw === 'number') {
+      fats = Math.max(0, Number(fatsRaw.toFixed(1))); // Assicura che sia almeno 0 e con max 1 decimale
     }
 
     // Costruisci e restituisci la risposta
@@ -943,7 +951,10 @@ export const getCaloriesForSingleIngredientFromGemini = async (
       calories,
       correctedName: correctedName || name, // Fallback al nome originale se correctedName è nullo o vuoto
       error: !!errorMessage || calories === null,
-      errorMessage: errorMessage || (calories === null ? "Impossibile calcolare le calorie per questo ingrediente." : undefined)
+      errorMessage: errorMessage || (calories === null ? "Impossibile calcolare i valori nutrizionali per questo ingrediente." : undefined),
+      proteins,
+      carbs,
+      fats
     };
 
   } catch (error) {
@@ -952,7 +963,10 @@ export const getCaloriesForSingleIngredientFromGemini = async (
       calories: null,
       correctedName: name,
       error: true,
-      errorMessage: error instanceof Error ? error.message : "Errore inatteso durante la stima delle calorie."
+      errorMessage: error instanceof Error ? error.message : "Errore inatteso durante la stima delle calorie.",
+      proteins: null,
+      carbs: null,
+      fats: null
     };
   }
 };

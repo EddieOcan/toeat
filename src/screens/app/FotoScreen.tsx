@@ -347,7 +347,7 @@ const FotoScreen: React.FC<Props> = ({ navigation }) => {
       fontFamily: "BricolageGrotesque-SemiBold", 
     },
     logoImage: {
-      width: 100,
+      width: 10,
       height: 35,
       resizeMode: 'contain'
     },

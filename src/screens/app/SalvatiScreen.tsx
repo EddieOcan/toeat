@@ -122,6 +122,12 @@ const SalvatiScreen: React.FC<Props> = ({ navigation }) => {
         }
       }
     }
+    
+    // Caso speciale per ecoscore mancante
+    if (type === 'eco' && (!grade || !numericScore)) {
+      return '#888888'; // Grigio per ecoscore mancante
+    }
+    
     // Se il grade non è valido o non c'è, usa il punteggio numerico
     return getColorFromNumericScore(numericScore, colors); // Passa colors per defaultColor
   };
@@ -171,19 +177,23 @@ const SalvatiScreen: React.FC<Props> = ({ navigation }) => {
               </View>
             )}
 
-            {(item.sustainability_score !== undefined || item.ecoscore_score !== undefined) && (
-                 <View style={[styles.scoreIconTextContainer, { marginLeft: item.health_score !== undefined ? 15 : 0} ]}>
+            {/* Mostro sempre l'icona ecoscore, anche se mancante */}
+                <View style={[styles.scoreIconTextContainer, { marginLeft: item.health_score !== undefined ? 15 : 0} ]}>
                     <Ionicons 
                         name="leaf" 
                         size={18} 
                         color={getScoreColor(item.ecoscore_grade, 'eco', item.sustainability_score ?? item.ecoscore_score)} 
                         style={styles.scoreIcon}
                     />
-                    <AppText style={[styles.scoreValueText, { color: "#000000" /* colors.text */ }]}>
-                        {item.sustainability_score !== undefined ? item.sustainability_score : item.ecoscore_score}
+                    <AppText style={[styles.scoreValueText, 
+                        (item.sustainability_score === undefined && item.ecoscore_score === undefined) 
+                            ? {color: "#888888"} 
+                            : {color: "#000000"}]}>
+                        {(item.sustainability_score !== undefined || item.ecoscore_score !== undefined)
+                            ? (item.sustainability_score !== undefined ? item.sustainability_score : item.ecoscore_score)
+                            : "--"}
                     </AppText>
                 </View>
-            )}
           </View>
         </View>
       </TouchableOpacity>
