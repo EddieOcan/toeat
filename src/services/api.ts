@@ -1378,7 +1378,7 @@ export const updateProductIngredientsInDb = async (
     const { data, error } = await supabase
       .from('products')
       .update({
-        ingredients_breakdown: JSON.stringify(ingredients),
+        ingredients_breakdown: ingredients, // Passare direttamente l'array, Supabase gestirà la serializzazione
         calories_estimate: caloriesEstimate,
         calorie_estimation_type: 'breakdown',
         // Aggiungiamo i valori nutrizionali stimati dall'AI
