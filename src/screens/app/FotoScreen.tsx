@@ -37,7 +37,11 @@ import {
   type DisplayableHistoryProduct,
   type RawProductData,
 } from "../../services/api"
-import { analyzeImageWithGeminiVision, type GeminiAnalysisResult } from "../../services/gemini"
+import { 
+  analyzeImageWithGeminiVisionAiSdk, 
+  analyzeImageWithUserPreferences,
+  type GeminiAnalysisResult 
+} from "../../services/gemini"
 import { useAuth } from "../../contexts/AuthContext"
 import * as FileSystem from "expo-file-system"
 import AppText from "../../components/AppText"
@@ -97,7 +101,7 @@ const WAVE_CORNER_RADIUS = 25;
 
 const FotoScreen: React.FC<Props> = ({ navigation }) => {
   // const [scanMode, setScanMode] = useState<'barcode' | 'photo'>('photo'); // RIMOSSO, sempre foto
-  const [visualAnalysisLoading, setVisualAnalysisLoading] = useState(false)
+
   // const [loading, setLoading] = useState(false) // loading era per processBarcodeScan
   const [isFotoCameraActive, setIsFotoCameraActive] = useState(true); // NUOVO STATO
   const { colors } = useTheme(); 
@@ -148,58 +152,106 @@ const FotoScreen: React.FC<Props> = ({ navigation }) => {
 
   const processVisualScan = async (imageUri: string) => {
     if (!user) { Alert.alert("Login Richiesto", "Devi effettuare il login."); return; }
-    setVisualAnalysisLoading(true);
-    
-    // Prima di iniziare l'analisi, naviga immediatamente alla schermata ProductDetail
-    // con la schermata di caricamento isPhotoAnalysis=true
-    // Preparazione dei dati minimi necessari per mostrare la schermata di caricamento
-    const visualBarcode = generateVisualScanBarcode();
-    const tempProductData: RawProductData = {
-      code: visualBarcode,
-      product_name: "Prodotto in analisi...",
-      brands: "",
-      image_url: imageUri,
-      ingredients_text: "", 
-      nutriments: {}, 
-      nutrition_grades: "", 
-      ecoscore_grade: "",
-      categories: "Scansione Visiva", 
-      labels: "", 
-      packaging: "",
-    };
-    
-    // Naviga alla schermata di dettaglio con il flag isPhotoAnalysis impostato a true
-    // Questo causerà la visualizzazione della schermata di caricamento specializzata
-    navigation.navigate("ProductDetail", { 
-      productRecordId: "temp_visual_scan", // Usa un ID temporaneo per evitare l'errore di ID mancante
-      initialProductData: tempProductData,
-      aiAnalysisResult: null,
-      isPhotoAnalysis: true // Flag specifico per l'analisi foto
-    });
     
     try {
+      console.log("[FOTO SCREEN] Inizio processamento visual scan");
+      
+      // 1. NAVIGA IMMEDIATAMENTE alla ProductDetailScreen con dati placeholder
+      const placeholderBarcode = generateVisualScanBarcode();
+      const placeholderProductData: RawProductData = {
+        code: placeholderBarcode,
+        product_name: "Analisi immagine...",
+        brands: "...",
+        image_url: imageUri, // Usa l'URI locale temporaneamente
+        ingredients_text: "",
+        nutriments: {},
+        nutrition_grades: "",
+        ecoscore_grade: "",
+        categories: "Scansione Visiva",
+        labels: "",
+        packaging: "",
+      };
+      
+      // Naviga SUBITO con i dati placeholder e il flag di loading
+      console.log("[FOTO SCREEN] Navigazione immediata alla ProductDetailScreen");
+      navigateToDetail("temp_visual_scan", placeholderProductData, null); // Il flag isPhotoAnalysis è già impostato nella navigateToDetail
+      
+      // 2. ESEGUI L'ANALISI AI IN BACKGROUND
+      console.log("[FOTO SCREEN] Inizio analisi AI in background");
+      
+      // Converti l'immagine in base64
       const imageBase64 = await FileSystem.readAsStringAsync(imageUri, { encoding: FileSystem.EncodingType.Base64 });
       let mimeType = "image/jpeg";
-      if (imageUri.endsWith(".png")) mimeType = "image/png"; else if (imageUri.endsWith(".webp")) mimeType = "image/webp";
-      const visualAiAnalysis = await analyzeImageWithGeminiVision(imageBase64, mimeType, "Prodotto da foto");
-      if (!visualAiAnalysis) { Alert.alert("Errore Analisi AI", "Impossibile analizzare."); setVisualAnalysisLoading(false); return; }
-      const uploadedImageUrl = await uploadProductImage(user.id, imageUri);
-      if (!uploadedImageUrl) { Alert.alert("Errore Upload", "Impossibile caricare immagine."); setVisualAnalysisLoading(false); return; }
-      const visualBarcode = generateVisualScanBarcode();
-      const rawDataForVisual: RawProductData = {
-        code: visualBarcode, product_name: visualAiAnalysis.productNameFromVision || "Prodotto (foto)",
-        brands: visualAiAnalysis.brandFromVision || "Sconosciuta", image_url: uploadedImageUrl,
-        ingredients_text: "", nutriments: {}, nutrition_grades: "", ecoscore_grade: "",
-        categories: visualAiAnalysis.productNameFromVision || "Scansione Visiva", labels: "", packaging: "",
-      };
-      const savedProductRecord = await saveProductAndManageHistory(user.id, visualBarcode, rawDataForVisual, visualAiAnalysis, uploadedImageUrl, true);
-      if (savedProductRecord?.id) { 
-        navigateToDetail(savedProductRecord.id, rawDataForVisual, visualAiAnalysis);
-        setVisualAnalysisLoading(false); // Imposta visualAnalysisLoading a false quando la navigazione avviene con successo
+      if (imageUri.endsWith(".png")) mimeType = "image/png"; 
+      else if (imageUri.endsWith(".webp")) mimeType = "image/webp";
+      
+      // Esegui analisi AI - prova prima quella personalizzata, poi fallback a quella standard
+      let visualAiAnalysis: GeminiAnalysisResult;
+      try {
+        console.log("[FOTO SCREEN] Tentativo analisi personalizzata");
+        visualAiAnalysis = await analyzeImageWithUserPreferences(imageBase64, mimeType, "Prodotto da foto", user.id);
+      } catch (personalizedError) {
+        console.warn("[FOTO SCREEN] Analisi personalizzata fallita, fallback a analisi standard:", personalizedError);
+        visualAiAnalysis = await analyzeImageWithGeminiVisionAiSdk(imageBase64, mimeType, "Prodotto da foto");
       }
-      else { Alert.alert("Errore Salvataggio", "Impossibile salvare prodotto."); }
-    } catch (error: any) { Alert.alert("Errore Inatteso", error.message || "Errore analisi visiva."); }
-    finally { setVisualAnalysisLoading(false); }
+      
+      if (!visualAiAnalysis) { 
+        Alert.alert("Errore Analisi AI", "Impossibile analizzare."); 
+        return; 
+      }
+      
+      // Upload dell'immagine
+      const uploadedImageUrl = await uploadProductImage(user.id, imageUri);
+      if (!uploadedImageUrl) { 
+        Alert.alert("Errore Upload", "Impossibile caricare immagine."); 
+        return; 
+      }
+      
+      // 3. CREA I DATI FINALI E SALVA NEL DATABASE
+      const finalRawDataForVisual: RawProductData = {
+        code: placeholderBarcode,
+        product_name: visualAiAnalysis.productNameFromVision || "Prodotto (foto)",
+        brands: visualAiAnalysis.brandFromVision || "Sconosciuta",
+        image_url: uploadedImageUrl,
+        ingredients_text: "",
+        nutriments: {},
+        nutrition_grades: "",
+        ecoscore_grade: "",
+        categories: visualAiAnalysis.productNameFromVision || "Scansione Visiva",
+        labels: "",
+        packaging: "",
+      };
+      
+      const savedProductRecord = await saveProductAndManageHistory(
+        user.id, 
+        placeholderBarcode, 
+        finalRawDataForVisual, 
+        visualAiAnalysis, 
+        uploadedImageUrl, 
+        true
+      );
+      
+      if (savedProductRecord?.id) {
+        console.log("[FOTO SCREEN] Analisi completata, dati salvati. ID:", savedProductRecord.id);
+        console.log("[FOTO SCREEN] Aggiornamento ProductDetailScreen con nuovo ID prodotto");
+        
+        // Naviga alla stessa ProductDetailScreen ma con l'ID reale e i dati finali
+        // Questo aggiornerà la pagina esistente invece di sostituirla
+        navigation.navigate("ProductDetail", {
+          productRecordId: savedProductRecord.id,
+          initialProductData: finalRawDataForVisual,
+          aiAnalysisResult: visualAiAnalysis,
+          isPhotoAnalysis: true
+        });
+        
+      } else {
+        Alert.alert("Errore Salvataggio", "Impossibile salvare prodotto.");
+      }
+      
+    } catch (error: any) { 
+      console.error("[FOTO SCREEN] Errore in processVisualScan:", error);
+      Alert.alert("Errore Inatteso", error.message || "Errore analisi visiva."); 
+    }
   };
 
   // handleBarCodeScannedFromView RIMOSSO
@@ -254,8 +306,7 @@ const FotoScreen: React.FC<Props> = ({ navigation }) => {
     }, 
     recentProductsListContentHorizontal: { paddingHorizontal: 16, paddingVertical: 10 }, 
     emptyStateText: { textAlign: "center", paddingVertical: 24, paddingHorizontal: 24, color: "#555555", opacity: 0.7, fontFamily: typography.body.fontFamily, marginTop: 20 },
-    loadingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center", zIndex: 1000 },
-    loadingText: { marginTop: 12, color: "#FFFFFF", fontFamily: typography.bodyMedium.fontFamily },
+    
     recentProductCardWrapper: { 
       position: 'relative',
       width: screenWidth * 0.85, 
@@ -373,14 +424,7 @@ const FotoScreen: React.FC<Props> = ({ navigation }) => {
         </View>
       </View>
 
-      {visualAnalysisLoading && ( // Modificato per mostrare solo visualAnalysisLoading
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#FFFFFF" />
-          <AppText style={styles.loadingText}>
-            {visualAnalysisLoading ? "Analisi immagine..." : "Caricamento..."}
-          </AppText>
-        </View>
-      )}
+
     </KeyboardAvoidingView>
   )
 }

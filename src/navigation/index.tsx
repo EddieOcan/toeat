@@ -16,6 +16,10 @@ import FotoScreen from "../screens/app/FotoScreen"
 import ProfileScreen from "../screens/app/ProfileScreen"
 import SalvatiScreen from "../screens/app/SalvatiScreen"
 import ProductDetailScreen from "../screens/app/ProductDetailScreen"
+import UserPreferencesScreen from "../screens/app/UserPreferencesScreen"
+import CalorieTrackingScreen from "../screens/app/CalorieTrackingScreen"
+import NutritionProfileSetupScreen from "../screens/app/NutritionProfileSetupScreen"
+import SelectProductForDayScreen from "../screens/app/SelectProductForDayScreen"
 
 // Importa la CustomTabBar
 import CustomTabBar from '../components/CustomTabBar';
@@ -38,11 +42,18 @@ export type AppStackParamList = {
     aiAnalysisResult?: GeminiAnalysisResult | null
     isPhotoAnalysis?: boolean
   }
+  UserPreferences: undefined
+  CalorieTracking: undefined
+  NutritionProfileSetup: undefined
+  SelectProductForDay: {
+    selectedDate: string
+  }
 }
 
 export type MainTabsParamList = {
   Scanner: undefined
   Foto: undefined
+  Calorie: undefined
   Salvati: undefined
   Profile: undefined
 }
@@ -77,6 +88,14 @@ const MainTabsNavigator = () => {
         component={FotoScreen}
         options={{
           title: "Foto",
+          headerShown: false,
+        }}
+      />
+      <MainTabs.Screen
+        name="Calorie"
+        component={CalorieTrackingScreen}
+        options={{
+          title: "Calorie",
           headerShown: false,
         }}
       />
@@ -126,6 +145,10 @@ const Navigation = () => {
     >
       <AppStack.Screen name="MainTabs" component={MainTabsNavigator} options={{ headerShown: false }} />
       <AppStack.Screen name="ProductDetail" component={ProductDetailScreen} options={{ headerShown: false }} />
+      <AppStack.Screen name="UserPreferences" component={UserPreferencesScreen} options={{ headerShown: false }} />
+      <AppStack.Screen name="CalorieTracking" component={CalorieTrackingScreen} options={{ headerShown: false }} />
+      <AppStack.Screen name="NutritionProfileSetup" component={NutritionProfileSetupScreen} options={{ headerShown: false }} />
+      <AppStack.Screen name="SelectProductForDay" component={SelectProductForDayScreen} options={{ headerShown: false }} />
     </AppStack.Navigator>
   ) : (
     <AuthStack.Navigator

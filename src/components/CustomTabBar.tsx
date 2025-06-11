@@ -71,6 +71,9 @@ const CustomTabBar: React.FC<CustomTabBarProps> = ({ state, descriptors, navigat
           } else if (route.name === 'Salvati') {
             iconName = isFocused ? 'heart' : 'heart-outline';
             tabLabel = "Salvati";
+          } else if (route.name === 'Calorie') {
+            iconName = isFocused ? 'fitness' : 'fitness-outline';
+            tabLabel = "Calorie";
           } else if (route.name === 'Profile') {
             iconName = isFocused ? 'person' : 'person-outline';
             tabLabel = "Profilo";

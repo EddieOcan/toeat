@@ -34,19 +34,19 @@ const SCALE_BAR_BACKGROUND_COLOR_INACTIVE = '#f8f9fa'; // Grigio molto chiaro pe
 const SCALE_BAR_TEXT_COLOR_INACTIVE = '#495057'; // Testo scuro per quadrati inattivi
 const SCALE_BAR_BORDER_RADIUS = 12; // Raggio per la barra completa
 
-// Costanti per i colori dei punteggi
-const SCORE_COLORS: { [key: string]: { background: string; text: string } } = {
-  'A+': { background: '#6ECFF6', text: '#000000' }, // Azzurro A+
-  'A': { background: '#1E8F4E', text: '#FFFFFF' }, // Verde scuro
-  'B': { background: '#7AC547', text: '#000000' }, // Verde chiaro
-  'C': { background: '#FFC734', text: '#000000' }, // Giallo
-  'D': { background: '#FF9900', text: '#000000' }, // Arancione
-  'E': { background: '#FF0000', text: '#FFFFFF' }, // Rosso
-  '1': { background: '#7AC547', text: '#000000' }, // Verde chiaro (NOVA 1)
-  '2': { background: '#FFC734', text: '#000000' }, // Giallo (NOVA 2)
-  '3': { background: '#FF9900', text: '#000000' }, // Arancione (NOVA 3)
-  '4': { background: '#FF0000', text: '#FFFFFF' }, // Rosso (NOVA 4)
-  'unknown': { background: '#e0e0e0', text: '#666666' },
+// Costanti per i colori dei punteggi - DESIGN COMPLETAMENTE NUOVO
+const SCORE_COLORS: { [key: string]: { background: string; text: string; border: string } } = {
+  'A+': { background: '#E8F5E8', text: '#2E7D32', border: '#4CAF50' },
+  'A': { background: '#E8F5E8', text: '#2E7D32', border: '#4CAF50' },
+  'B': { background: '#F1F8E9', text: '#558B2F', border: '#8BC34A' },
+  'C': { background: '#FFF3E0', text: '#F57C00', border: '#FF9800' },
+  'D': { background: '#FFF3E0', text: '#E65100', border: '#FF5722' },
+  'E': { background: '#FFEBEE', text: '#C62828', border: '#F44336' },
+  '1': { background: '#E8F5E8', text: '#2E7D32', border: '#4CAF50' },
+  '2': { background: '#F1F8E9', text: '#558B2F', border: '#8BC34A' },
+  '3': { background: '#FFF3E0', text: '#F57C00', border: '#FF9800' },
+  '4': { background: '#FFEBEE', text: '#C62828', border: '#F44336' },
+  'unknown': { background: '#F5F5F5', text: '#757575', border: '#BDBDBD' },
 };
 
 const ScoreIndicatorCard: React.FC<ScoreIndicatorCardProps> = ({
@@ -116,8 +116,8 @@ const ScoreIndicatorCard: React.FC<ScoreIndicatorCardProps> = ({
           </View>
       )}
 
-      {/* NUOVA BARRA CON QUADRATI SEPARATI */}
-      <View style={[styles.squaresContainer, isSmall && styles.squaresContainerSmall]}>
+      {/* NUOVO DESIGN COMPLETAMENTE DIVERSO */}
+      <View style={styles.modernContainer}>
         {isValueTrulyMissing ? (
           <View style={styles.missingValueDisplay}>
             <Text style={[styles.missingValueText, isSmall && styles.missingValueTextSmall]}>
@@ -125,58 +125,43 @@ const ScoreIndicatorCard: React.FC<ScoreIndicatorCardProps> = ({
             </Text>
           </View>
         ) : (
-          <View style={styles.squaresRow}>
-            {scale.map((item, index) => {
-              const itemStr = String(item).toUpperCase();
-              const isSelected = itemStr === normalizedValueForColor;
-              
-              // Determino i colori per questo elemento
-              let itemBackgroundColor = SCALE_BAR_BACKGROUND_COLOR_INACTIVE;
-              let itemTextColor = SCALE_BAR_TEXT_COLOR_INACTIVE;
-              
-              if (isSelected) {
-                const itemColors = SCORE_COLORS[itemStr] || SCORE_COLORS['unknown'];
-                itemBackgroundColor = itemColors.background;
-                itemTextColor = itemColors.text;
-              }
-
-              return (
-                <View key={itemStr} style={[
-                  styles.squareWrapper,
-                  isSmall && styles.squareWrapperSmall
+          <View style={styles.modernScoreDisplay}>
+            {/* Header con il valore principale evidenziato */}
+            <View style={styles.scoreValueWrapper}>
+              <View style={[
+                styles.scoreCircle,
+                isSmall && styles.scoreCircleSmall,
+                { backgroundColor: (SCORE_COLORS[normalizedValueForColor] || SCORE_COLORS['unknown']).background }
+              ]}>
+                <Text style={[
+                  styles.scoreValueText,
+                  isSmall && styles.scoreValueTextSmall,
+                  { color: (SCORE_COLORS[normalizedValueForColor] || SCORE_COLORS['unknown']).text }
                 ]}>
-                  {/* Ombra direzionata */}
-                  <View 
-                    style={[
-                      styles.squareShadow, 
-                      {
-                        borderRadius: 12,
-                      }
-                    ]} 
-                  />
+                  {normalizedValueForColor}
+                </Text>
+              </View>
+              <View style={styles.scoreProgressBar}>
+                {scale.map((item, index) => {
+                  const itemStr = String(item).toUpperCase();
+                  const isSelected = itemStr === normalizedValueForColor;
+                  const itemColors = SCORE_COLORS[itemStr] || SCORE_COLORS['unknown'];
                   
-                  {/* Contenitore principale con il bordo */}
-                  <View
-                    style={[
-                      styles.squareItem,
-                      {
-                        backgroundColor: itemBackgroundColor,
-                      }
-                    ]}
-                  >
-                    <Text
+                  return (
+                    <View
+                      key={itemStr}
                       style={[
-                        styles.squareItemText,
-                        isSmall && styles.squareItemTextSmall,
-                        { color: itemTextColor }
+                        styles.progressDot,
+                        isSmall && styles.progressDotSmall,
+                        {
+                          backgroundColor: isSelected ? itemColors.border : '#E0E0E0',
+                        }
                       ]}
-                    >
-                      {item}
-                    </Text>
-                  </View>
-                </View>
-              );
-            })}
+                    />
+                  );
+                })}
+              </View>
+            </View>
           </View>
         )}
       </View>
@@ -389,68 +374,7 @@ const styles = StyleSheet.create({
   scaleItemTextSmall: {
     fontSize: 18, // Aumento anche qui
   },
-  // --- NUOVI STILI PER I QUADRATI SEPARATI ---
-  squaresContainer: {
-    paddingHorizontal: 0,
-    paddingVertical: 2, // Ridotto da 10 a 2
-    width: '100%',
-  },
-  
-  squaresContainerSmall: {
-    paddingVertical: 2, // Ridotto da 5 a 2
-  },
-  
-  squaresRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-  },
-  
-  squareWrapper: {
-    position: 'relative',
-    marginHorizontal: 3, // Aumentato leggermente da 2 a 3
-    flex: 1,
-    height: SQUARE_SIZE_NORMAL * SQUARE_HEIGHT_RATIO, // Aumentato sviluppo verticale
-  },
-  
-  squareWrapperSmall: {
-    height: SQUARE_SIZE_SMALL * SQUARE_HEIGHT_RATIO, // Aumentato sviluppo verticale versione small
-  },
-  
-  squareShadow: {
-    position: 'absolute',
-    top: SQUARE_SHADOW_OFFSET_VALUE,
-    left: SQUARE_SHADOW_OFFSET_VALUE,
-    bottom: 0, // Fissiamo alla parte inferiore
-    right: 0, // Fissiamo alla parte destra
-    backgroundColor: '#000000',
-    borderRadius: 12,
-    zIndex: 1,
-    // Rimuoviamo width: '100%' che causava problemi
-  },
-  
-  squareItem: {
-    position: 'absolute', // Un solo position
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 0.1, // Modificato da 0 a 0.5 per aggiungere un bordo sottile
-    borderColor: BORDER_COLOR, // Mantenuto solo per riferimento
-    borderRadius: 12,
-    zIndex: 2,
-    top: 0, // In alto
-    left: 0, // A sinistra
-    right: SQUARE_SHADOW_OFFSET_VALUE, // Spazio per l'ombra a destra
-    bottom: SQUARE_SHADOW_OFFSET_VALUE, // Spazio per l'ombra in basso
-  },
-  
-  squareItemText: {
-    fontSize: 22, // Aumento anche la dimensione del testo
-    fontFamily: 'BricolageGrotesque-SemiBold',
-  },
-  
-  squareItemTextSmall: {
-    fontSize: 18, // Aumento anche qui
-  },
+
   
   // --- STILI PER VALORE MANCANTE ---
   missingValueDisplay: {
@@ -481,6 +405,122 @@ const styles = StyleSheet.create({
   stackedLayout: {
     flexDirection: 'column',
   },
+
+  
+
+  pillsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 0,
+    paddingVertical: 2,
+    width: '100%',
+    gap: 6,
+  },
+
+  pillItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 20,
+    minHeight: 40,
+    position: 'relative',
+  },
+
+  pillItemSmall: {
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    borderRadius: 16,
+    minHeight: 32,
+  },
+
+  pillText: {
+    fontSize: 18,
+    fontFamily: 'BricolageGrotesque-Bold',
+    textAlign: 'center',
+  },
+
+  pillTextSmall: {
+    fontSize: 15,
+  },
+
+  pillDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#4CAF50',
+    position: 'absolute',
+    bottom: 4,
+    left: '50%',
+    marginLeft: -3,
+  },
+
+  modernContainer: {
+    paddingVertical: 10,
+    paddingHorizontal: 5,
+    width: '100%',
+  },
+
+  modernScoreDisplay: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 15,
+  },
+
+  scoreValueWrapper: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 10,
+  },
+
+  scoreCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 3,
+    borderColor: 'rgba(0,0,0,0.1)',
+  },
+
+  scoreCircleSmall: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+  },
+
+  scoreValueText: {
+    fontSize: 28,
+    fontFamily: 'BricolageGrotesque-Bold',
+  },
+
+  scoreValueTextSmall: {
+    fontSize: 22,
+  },
+
+  scoreProgressBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+
+  progressDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+
+  progressDotSmall: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+
+
 });
 
 export default ScoreIndicatorCard; 

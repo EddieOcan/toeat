@@ -143,8 +143,7 @@ const styles = StyleSheet.create({
   }, 
   recentProductsListContentHorizontal: { paddingHorizontal: 16, paddingVertical: 10 }, 
   emptyStateText: { textAlign: "center", paddingVertical: 24, paddingHorizontal: 24, color: "#555555", opacity: 0.7, fontFamily: typography.body.fontFamily, marginTop: 20 },
-  loadingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.6)", justifyContent: "center", alignItems: "center", zIndex: 1000 },
-  loadingText: { marginTop: 12, color: "#FFFFFF", fontFamily: typography.bodyMedium.fontFamily },
+
   recentProductCardWrapper: { 
     position: 'relative',
     width: screenWidth * 0.85, 
@@ -261,10 +260,30 @@ const styles = StyleSheet.create({
     height: 35,
     resizeMode: 'contain'
   },
+  // Stile per l'icona preferenze
+  preferencesButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    zIndex: 10,
+  },
 });
 
 const HomeScreen: React.FC<Props> = ({ navigation }) => {
-  const [loading, setLoading] = useState(false) 
   const [isScannerCameraActive, setIsScannerCameraActive] = useState(true);
   const { colors } = useTheme(); 
   const { user } = useAuth()
@@ -305,20 +324,35 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
     reloadRecentProducts();
   };
 
+  const navigateToPreferences = () => {
+    navigation.navigate("UserPreferences");
+  };
+
   const processBarcodeScan = async (barcode: string) => {
-    if (!user) { Alert.alert("Login Richiesto", "Devi effettuare il login."); setLoading(false); return; }
-    setLoading(true);
+    if (!user) { Alert.alert("Login Richiesto", "Devi effettuare il login."); return; }
     try {
       const result: ProcessedProductInfo = await handleBarcodeScan(barcode, user.id);
-      if (result.source === "error") { Alert.alert("Errore Processamento", result.errorMessage || "Errore sconosciuto.");
+      if (result.source === "error") { 
+        Alert.alert("Errore Processamento", result.errorMessage || "Errore sconosciuto.");
+        // Reset scanner per permettere nuove scansioni
+        barcodeScannerRef.current?.resetScanner();
       } else if (result.source === "not_found_off") {
         Alert.alert("Prodotto Non Trovato", result.errorMessage || `Barcode ${barcode} non trovato.`);
+        // Reset scanner per permettere nuove scansioni
+        barcodeScannerRef.current?.resetScanner();
       } else if (result.dbProduct?.id) { 
         navigateToDetail(result.dbProduct.id, result.productData, result.aiAnalysis); 
       }
-      else { Alert.alert("Errore Inatteso", "Dettagli prodotto non disponibili."); }
-    } catch (error: any) { Alert.alert("Errore Critico", error.message || "Errore grave."); }
-    finally { setLoading(false); }
+      else { 
+        Alert.alert("Errore Inatteso", "Dettagli prodotto non disponibili."); 
+        // Reset scanner per permettere nuove scansioni
+        barcodeScannerRef.current?.resetScanner();
+      }
+    } catch (error: any) { 
+      Alert.alert("Errore Critico", error.message || "Errore grave."); 
+      // Reset scanner per permettere nuove scansioni
+      barcodeScannerRef.current?.resetScanner();
+    }
   };
 
   const handleBarCodeScannedFromView = (barcode: string) => { 
@@ -338,6 +372,14 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             onClose={handleBarcodeScannerClose}
             isCameraActive={isScannerCameraActive}
         />
+        
+        {/* Icona Preferenze */}
+        <TouchableOpacity 
+          style={[styles.preferencesButton, { top: insets.top + 10 }]}
+          onPress={navigateToPreferences}
+        >
+          <Ionicons name="settings" size={24} color="#333" />
+        </TouchableOpacity>
       </View>
       
       <View style={{position: 'relative', marginTop: -WAVE_CORNER_RADIUS}}>
@@ -350,14 +392,7 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
         </View>
       </View>
 
-      {loading && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#FFFFFF" />
-          <AppText style={styles.loadingText}>
-            {loading ? "Ricerca prodotto..." : "Caricamento..."}
-          </AppText>
-        </View>
-      )}
+
     </KeyboardAvoidingView>
   );
 };

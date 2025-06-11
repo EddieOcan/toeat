@@ -4,6 +4,7 @@ export type Colors = {
   background: string
   card: string
   cardBackground: string
+  surface: string
   text: string
   textMuted: string
   buttonText: string
@@ -24,6 +25,7 @@ export const lightColors: Colors = {
   background: "#FFFFFF",
   card: "#F5F5F5",
   cardBackground: "#F5F5F5",
+  surface: "#FFFFFF",
   text: "#212121",
   textMuted: "#757575",
   buttonText: "#FFFFFF",
@@ -44,6 +46,7 @@ export const darkColors: Colors = {
   background: "#121212",
   card: "#1E1E1E",
   cardBackground: "#1E1E1E",
+  surface: "#1E1E1E",
   text: "#FFFFFF",
   textMuted: "#BDBDBD",
   buttonText: "#000000",

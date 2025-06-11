@@ -109,18 +109,23 @@ const RecentProductItem = memo(({ item, navigation, colors }: {
     analysis: item.health_analysis || '', 
     pros: item.health_pros || [], 
     cons: item.health_cons || [], 
-    recommendations: item.health_recommendations || [], 
-    sustainabilityAnalysis: item.sustainability_analysis || '', 
+     
     sustainabilityPros: item.sustainability_pros || [], 
     sustainabilityCons: item.sustainability_cons || [], 
-    sustainabilityRecommendations: item.sustainability_recommendations || [], 
-    suggestedPortionGrams: typeof item.suggested_portion_grams === 'number' ? item.suggested_portion_grams : undefined, 
-    nutriScoreExplanation: item.nutri_score_explanation || '', 
-    novaExplanation: item.nova_explanation || '', 
-    ecoScoreExplanation: item.eco_score_explanation || '', 
+     
+                            // Spiegazioni score rimosse per analisi foto
+            nutriScoreExplanation: item.is_visually_analyzed ? '' : (item.nutri_score_explanation || ''),
+            novaExplanation: item.is_visually_analyzed ? '' : (item.nova_explanation || ''),
+            ecoScoreExplanation: item.is_visually_analyzed ? '' : (item.eco_score_explanation || ''), 
     productNameFromVision: undefined, 
     brandFromVision: undefined,
     calories_estimate: item.calories_estimate || undefined,
+    // AGGIUNTO: Includi i valori nutrizionali stimati dall'AI per prodotti confezionati
+    calorie_estimation_type: (item as any).calorie_estimation_type,
+    estimated_energy_kcal_100g: (item as any).estimated_energy_kcal_100g,
+    estimated_proteins_100g: (item as any).estimated_proteins_100g,
+    estimated_carbs_100g: (item as any).estimated_carbs_100g,
+    estimated_fats_100g: (item as any).estimated_fats_100g,
   } : null;
   
   const handlePress = () => {

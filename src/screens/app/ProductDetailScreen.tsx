@@ -1,4 +1,4 @@
- "use client"
+"use client"
 
 import React, { useMemo, useRef, useEffect, useState, useCallback } from "react"
 import {
@@ -47,8 +47,8 @@ import type { GeminiAnalysisResult, EstimatedIngredient } from "../../services/g
 import { StatusBar } from 'expo-status-bar';
 import { StatusBar as RNStatusBar } from 'react-native';
 import ScoreIndicatorCard from '../../components/ScoreIndicatorCard';
-import LoadingAnimationScreen from '../../components/LoadingAnimationScreen';
-import { getCaloriesForSingleIngredientFromGemini } from "../../services/gemini"; // IMPORTAZIONE NUOVA FUNZIONE
+
+import { getCaloriesForSingleIngredientFromGeminiAiSdk } from "../../services/gemini"; // IMPORTAZIONE NUOVA FUNZIONE
 
 // *** NUOVO CODICE: DEBUG FLAG ***
 const DEBUG_CALORIES = true; 
@@ -186,12 +186,13 @@ type ProductDetailScreenRouteParams = {
   initialProductData?: RawProductData | null; 
   aiAnalysisResult?: GeminiAnalysisResult | null;
   isPhotoAnalysis?: boolean; // Nuovo parametro per distinguere l'analisi foto
+  isUpdate?: boolean; // Flag per indicare che è un aggiornamento di una pagina esistente
 };
 
 type Props = NativeStackScreenProps<AppStackParamList, "ProductDetail">;
 
 const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
-  const { productRecordId, initialProductData: routeInitialProductData, aiAnalysisResult: routeAiAnalysisResult, isPhotoAnalysis } = route.params as ProductDetailScreenRouteParams;
+  const { productRecordId, initialProductData: routeInitialProductData, aiAnalysisResult: routeAiAnalysisResult, isPhotoAnalysis, isUpdate } = route.params as ProductDetailScreenRouteParams;
   
   const [displayProductInfo, setDisplayProductInfo] = useState<RawProductData | ProductRecord | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState<GeminiAnalysisResult | null>(null);
@@ -227,6 +228,20 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
   const [weightInputFocused, setWeightInputFocused] = useState<string | null>(null);
   const [nameInputFocused, setNameInputFocused] = useState(false);
 
+  // Aggiungi nuovi stati per gestire il loading UX migliorato
+  const [showLoadingAnimation, setShowLoadingAnimation] = useState(false);
+  const [currentLoadingMessage, setCurrentLoadingMessage] = useState("");
+  const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
+
+  // Messaggi di caricamento che si alternano
+  const loadingMessages = [
+    "Analisi valori nutrizionali...",
+    "Analisi del livello di lavorazione industriale...",
+    "Analisi impatto ambientale...",
+    "Calcolo punteggio salute...",
+    "Generazione raccomandazioni..."
+  ];
+
   // Riferimento allo ScrollView per lo scroll automatico
   const scrollViewRef = useRef<ScrollView>(null);
   // Riferimenti per i componenti che potrebbero richiedere lo scroll
@@ -237,6 +252,21 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     // Disabilita se è un'analisi foto E non c'è un ID prodotto valido (diverso da temp_visual_scan)
     return isPhotoAnalysis && (!productRecordId || productRecordId === "temp_visual_scan");
   }, [isPhotoAnalysis, productRecordId]);
+
+  // Funzione per determinare se è un prodotto scansionato con barcode
+  const isProductFromBarcodeScan = useMemo(() => {
+    if (!displayProductInfo) return false;
+    
+    // Verifica se ha un barcode valido (non temp_visual_scan)
+    const hasValidBarcode = 
+      ('barcode' in displayProductInfo && displayProductInfo.barcode && displayProductInfo.barcode !== 'temp_visual_scan') ||
+      ('code' in displayProductInfo && displayProductInfo.code && displayProductInfo.code !== 'temp_visual_scan');
+    
+    // Non è un prodotto da analisi foto
+    const isNotPhotoAnalysis = !isProductFromPhotoAnalysis(isPhotoAnalysis, displayProductInfo, aiAnalysis);
+    
+    return hasValidBarcode && isNotPhotoAnalysis;
+  }, [displayProductInfo, isPhotoAnalysis, aiAnalysis]);
 
   // Stile per l'indicatore di caricamento minimale
   const aiLoadingMinimalStyle: { container: ViewStyle, text: TextStyle } = {
@@ -263,7 +293,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
 
   // Costanti dalla HomeScreen per coerenza (verificare se già definite o se servono precise)
   const COMMON_BORDER_WIDTH = 2; // Già CARD_BORDER_WIDTH, usiamo quella
-  const IMAGE_SHADOW_OFFSET = 2; // Offset per l'ombra dell'immagine dentro la card
+  const IMAGE_SHADOW_OFFSET = 2; // Offset per l' gestirle chiaombra dell'immagine dentro la card
 
   // Costanti per le "pillole" dei valori nutrizionali
   const PILL_BORDER_WIDTH = 1.5;
@@ -332,11 +362,11 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     // non mostriamo l'errore e continuiamo normalmente
     const isPhotoAnalysisWithTempId = productRecordId === "temp_visual_scan" && isPhotoAnalysis && routeInitialProductData;
     
-    logCalories(`loadProductData iniziato, productRecordId=${productRecordId}, isPhotoAnalysis=${isPhotoAnalysis}`);
+    logCalories(`loadProductData iniziato, productRecordId=${productRecordId}, isPhotoAnalysis=${isPhotoAnalysis}, isUpdate=${isUpdate}`);
     
-    // Reset COMPLETO dello stato all'inizio del caricamento di un nuovo prodotto
-    // Questo è fondamentale per evitare contaminazione tra prodotti diversi
-    if (mountedRef.current) {
+    // Reset COMPLETO dello stato SOLO se NON è un aggiornamento
+    // Per gli aggiornamenti, manteniamo lo stato esistente e aggiorniamo solo quello che serve
+    if (mountedRef.current && !isUpdate) {
       setDisplayProductInfo(null);
       setAiAnalysis(null);
       setLoadingInitialData(true);
@@ -344,7 +374,13 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       setEditableIngredients(null);
       setTotalEstimatedCalories(null);
       originalIngredientsBreakdownRef.current = null;
-      logCalories('Reset completo dello stato effettuato');
+      logCalories('Reset completo dello stato effettuato (NON è un aggiornamento)');
+    } else if (isUpdate) {
+      logCalories('Aggiornamento in corso - mantenendo stato esistente');
+      // Per gli aggiornamenti, impostiamo loading solo se necessario
+      if (mountedRef.current && !displayProductInfo) {
+        setLoadingInitialData(true);
+      }
     }
     
     // Modifica della condizione per considerare valido anche il caso dell'analisi foto temporanea
@@ -424,12 +460,12 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                 analysis: fetchedProduct.health_analysis ?? '',
                 pros: parseJsonArrayField(fetchedProduct.health_pros),
                 cons: parseJsonArrayField(fetchedProduct.health_cons),
-                recommendations: fetchedProduct.health_recommendations ?? [],
-                sustainabilityAnalysis: fetchedProduct.sustainability_analysis ?? '',
+
+      
                 sustainabilityPros: parseJsonArrayField(fetchedProduct.sustainability_pros),
                 sustainabilityCons: parseJsonArrayField(fetchedProduct.sustainability_cons),
-                sustainabilityRecommendations: fetchedProduct.sustainability_recommendations ?? [],
-                suggestedPortionGrams: fetchedProduct.suggested_portion_grams,
+
+        
                 nutriScoreExplanation: fetchedProduct.nutri_score_explanation,
                 novaExplanation: fetchedProduct.nova_explanation,
                 ecoScoreExplanation: fetchedProduct.eco_score_explanation,
@@ -442,6 +478,11 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                 // Aggiungiamo anche i campi specifici dell'analisi visiva se esistono nel record del DB
                 productNameFromVision: (fetchedProduct as any).product_name_from_vision, 
                 brandFromVision: (fetchedProduct as any).brand_from_vision,
+                // AGGIUNTO: Includi i valori nutrizionali stimati dall'AI dal database
+                estimated_energy_kcal_100g: (fetchedProduct as any).estimated_energy_kcal_100g,
+                estimated_proteins_100g: (fetchedProduct as any).estimated_proteins_100g,
+                estimated_carbs_100g: (fetchedProduct as any).estimated_carbs_100g,
+                estimated_fats_100g: (fetchedProduct as any).estimated_fats_100g,
               };
               
               logCalories('initialAiAnalysis creato da DB:', initialAiAnalysis);
@@ -541,13 +582,64 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       routeInitialProductData, 
       routeAiAnalysisResult,
       isPhotoAnalysis, // Dipendenza esplicita
+      isUpdate, // Nuova dipendenza per gestire gli aggiornamenti
   ]);
 
+  // useEffect esistente per caricare i dati
   useEffect(() => {
     const mountedRef = { current: true };
     loadProductData(mountedRef);
     return () => { mountedRef.current = false; };
   }, [loadProductData]);
+
+  // Effetto per gestire l'animazione dei messaggi di caricamento
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval>;
+    
+    // Interrompi l'animazione se l'analisi AI è completata
+    if (aiAnalysis && showLoadingAnimation) {
+      setShowLoadingAnimation(false);
+      return;
+    }
+    
+    // Determina se mostrare il loading per barcode O per analisi foto
+    const shouldShowLoadingForBarcode = isProductFromBarcodeScan && isAiLoading && !aiAnalysis;
+    const shouldShowLoadingForPhoto = isPhotoAnalysis && (
+      (productRecordId === "temp_visual_scan" && !aiAnalysis) || // Caso: navigazione immediata senza dati AI
+      (isAiLoading && !aiAnalysis) // Caso: analisi AI in corso
+    );
+    
+    if (shouldShowLoadingForBarcode || shouldShowLoadingForPhoto) {
+      setShowLoadingAnimation(true);
+      
+      // Messaggi specifici per tipo di analisi
+      const photoLoadingMessages = [
+        "Analisi immagine in corso...",
+        "Riconoscimento prodotto...", 
+        "Calcolo valori nutrizionali...",
+        "Analisi salutare dell'alimento...",
+        "Generazione raccomandazioni..."
+      ];
+      
+      const messages = shouldShowLoadingForPhoto ? photoLoadingMessages : loadingMessages;
+      setCurrentLoadingMessage(messages[0]);
+      setLoadingMessageIndex(0);
+      
+      interval = setInterval(() => {
+        setLoadingMessageIndex(prev => {
+          const nextIndex = (prev + 1) % messages.length;
+          setCurrentLoadingMessage(messages[nextIndex]);
+          return nextIndex;
+        });
+      }, 2000); // Cambia messaggio ogni 2 secondi
+    } else {
+      setShowLoadingAnimation(false);
+    }
+    
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isProductFromBarcodeScan, isPhotoAnalysis, productRecordId, isAiLoading, aiAnalysis, showLoadingAnimation]);
 
   // Log di aiAnalysis quando cambia
   useEffect(() => {
@@ -598,11 +690,11 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               analysis: displayProductInfo.health_analysis ?? '',
               pros: [],
               cons: [],
-              recommendations: [],
-              sustainabilityAnalysis: '',
+
+  
               sustainabilityPros: [],
               sustainabilityCons: [],
-              sustainabilityRecommendations: [],
+
               calories_estimate: displayProductInfo.calories_estimate,
               // Aggiungiamo il tipo come breakdown per la frutta e verdura singola
               calorie_estimation_type: 'breakdown'
@@ -2087,34 +2179,443 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       padding: 8,
       marginLeft: 5,
     },
+    scoreSkeletonContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginRight: 15,
+    },
+    scoreSkeletonTitle: {
+      width: 20,
+      height: 20,
+      backgroundColor: colors.textMuted + '30',
+      borderRadius: 10,
+      marginRight: 5,
+    },
+    scoreSkeletonValue: {
+      width: 30,
+      height: 16,
+      backgroundColor: colors.textMuted + '30',
+      borderRadius: 8,
+    },
+    descriptionSkeletonContainer: {
+      marginTop: 15,
+      paddingHorizontal: 15,
+    },
+    descriptionSkeletonLine: {
+      height: 12,
+      backgroundColor: colors.textMuted + '30',
+      borderRadius: 6,
+      marginBottom: 8,
+    },
+    loadingAnimationContainer: {
+      marginTop: 20,
+      marginHorizontal: 5, // Cambiato da 15 a 20 per allinearsi con il resto
+      marginBottom: 20,
+      position: 'relative',
+      zIndex: 1,
+    },
+    loadingCard: {
+      backgroundColor: '#FFFFFF', // Cambiato da CARD_BACKGROUND_COLOR a bianco fisso
+      borderRadius: 15,
+      borderWidth: CARD_BORDER_WIDTH,
+      borderColor: BORDER_COLOR,
+      padding: 25,
+      shadowColor: BORDER_COLOR,
+      shadowOffset: { width: SHADOW_OFFSET_VALUE, height: SHADOW_OFFSET_VALUE },
+      shadowOpacity: 1,
+      shadowRadius: 0,
+      elevation: 5,
+    },
+    loadingHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 20,
+    },
+    loadingIconContainer: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: `${colors.primary}20`,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+      borderWidth: 1,
+      borderColor: colors.primary,
+    },
+    loadingTitle: {
+      fontSize: 18,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      color: colors.text,
+    },
+    loadingMessage: {
+      fontSize: 16,
+      fontFamily: 'BricolageGrotesque-Medium',
+      color: colors.text, // Cambiato da colors.textMuted a colors.text per colore fisso
+      textAlign: 'center',
+      marginTop: 15,
+      minHeight: 20,
+      lineHeight: 22,
+    },
+    progressBarContainer: {
+      marginBottom: 20,
+    },
+    progressBarBackground: {
+      height: 6,
+      backgroundColor: '#E0E0E0',
+      borderRadius: 3,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: '#D0D0D0',
+    },
+    progressBarFill: {
+      height: '100%',
+      backgroundColor: colors.primary,
+      borderRadius: 2,
+    },
+    dotsContainer: {
+      flexDirection: 'row',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    dot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      marginHorizontal: 4,
+    },
+    loadingSpinner: {
+    },
+    loadingContent: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: 80,
+    },
+    // Stili per lo skeleton text (nome e marca durante loading foto)
+    skeletonTextContainer: {
+      marginVertical: 4,
+    },
+    skeletonText: {
+      backgroundColor: colors.textMuted + '30',
+      borderRadius: 6,
+      // width e height verranno impostate inline
+    },
+
+    // NUOVI STILI PER IL DESIGN MODERNO DEI VALORI NUTRIZIONALI
+    modernNutritionSection: {
+      paddingVertical: 20,
+      paddingHorizontal: 0, // Rimosso padding per uniformare con il resto
+    },
+    
+    // Header della sezione nutrizionale - RIMOSSO PERCHE' NON SERVE PIU'
+    
+    nutritionModernTitle: {
+      fontSize: 18, // Ridotto da 22 a 18 per uniformare
+      fontFamily: 'BricolageGrotesque-Bold',
+      flex: 1,
+      textAlign: 'left',
+    },
+
+    // Nuovo container grande per i valori nutrizionali
+    nutritionMainCardWrapper: {
+      position: 'relative',
+      marginBottom: 20,
+      marginTop: 0, // Ridotto da 12 a 0 per uniformare con le altre sezioni
+    },
+    nutritionMainCardShadow: {
+      backgroundColor: BORDER_COLOR,
+      borderRadius: 16,
+      position: 'absolute',
+      top: SHADOW_OFFSET_VALUE,
+      left: SHADOW_OFFSET_VALUE,
+      width: '100%',
+      height: '100%',
+      zIndex: 0,
+    },
+    nutritionMainCardContainer: {
+      backgroundColor: CARD_BACKGROUND_COLOR,
+      borderRadius: 16,
+      borderWidth: CARD_BORDER_WIDTH,
+      borderColor: BORDER_COLOR,
+      paddingTop: 24, // Mantengo 24 per il top
+      paddingBottom: 16, // Ridotto da 24 a 16 per bilanciare
+      paddingHorizontal: 20,
+      position: 'relative',
+      zIndex: 1,
+    },
+    nutritionGridContainer: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'space-between',
+    },
+    nutritionItemWrapper: {
+      width: '48%', // Due colonne
+      marginBottom: 28, // Aumentato da 20 a 28 per più spazio tra le righe
+    },
+    // Nuovo stile per valori secondari (più piccoli, 3 per riga)
+    nutritionItemWrapperSecondary: {
+      width: '31%', // Tre colonne per i valori secondari
+      marginBottom: 16,
+    },
+    nutritionItemContent: {
+      alignItems: 'center',
+    },
+    nutritionIconContainer: {
+      width: 50,
+      height: 50,
+      borderRadius: 25,
+      borderWidth: 2,
+      borderColor: BORDER_COLOR,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginBottom: 8,
+    },
+    // Icona più piccola per valori secondari
+    nutritionIconContainerSecondary: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      borderWidth: 2,
+      borderColor: BORDER_COLOR,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginBottom: 6,
+    },
+    nutritionValueText: {
+      fontSize: 18,
+      fontFamily: 'BricolageGrotesque-Bold',
+      color: BORDER_COLOR,
+      textAlign: 'center',
+      marginBottom: 4,
+    },
+    // Testo più piccolo per valori secondari
+    nutritionValueTextSecondary: {
+      fontSize: 15,
+      fontFamily: 'BricolageGrotesque-Bold',
+      color: BORDER_COLOR,
+      textAlign: 'center',
+      marginBottom: 3,
+    },
+    nutritionLabelText: {
+      fontSize: 13,
+      fontFamily: 'BricolageGrotesque-Medium',
+      color: colors.textMuted,
+      textAlign: 'center',
+    },
+    // Label più piccola per valori secondari
+    nutritionLabelTextSecondary: {
+      fontSize: 11,
+      fontFamily: 'BricolageGrotesque-Medium',
+      color: colors.textMuted,
+      textAlign: 'center',
+    },
+    nutritionProgressContainer: {
+      width: '100%',
+      height: 4,
+      backgroundColor: 'rgba(0,0,0,0.1)',
+      borderRadius: 2,
+      marginTop: 8,
+      overflow: 'hidden',
+    },
+    nutritionProgressFill: {
+      height: '100%',
+      borderRadius: 2,
+    },
+
+    // Grid principale 2x2 per i valori primari - RIMOSSO
+    primaryNutrientsGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'space-between',
+      marginBottom: 20,
+    },
+    primaryNutrientCardWrapper: {
+      position: 'relative',
+      width: '48%', // Due colonne con piccolo gap
+      marginBottom: 15,
+      height: 140,
+    },
+    primaryNutrientCardShadow: {
+      backgroundColor: BORDER_COLOR,
+      borderRadius: 18,
+      position: 'absolute',
+      top: 2, // Ridotto da 4 a 2
+      left: 2, // Ridotto da 4 a 2
+      width: '100%',
+      height: '100%',
+      zIndex: 0,
+    },
+    primaryNutrientCardContainer: {
+      borderRadius: 18,
+      borderWidth: 2.5,
+      borderColor: BORDER_COLOR,
+      width: '100%',
+      height: '100%',
+      padding: 12,
+      justifyContent: 'space-between',
+      position: 'relative',
+      zIndex: 1,
+    },
+    primaryNutrientCardHeader: {
+      alignItems: 'flex-end',
+      marginBottom: 5,
+    },
+    primaryNutrientIconContainer: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: 'rgba(0,0,0,0.1)',
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 1.5,
+      borderColor: '#000000',
+    },
+    primaryNutrientValueContainer: {
+      alignItems: 'center',
+      marginVertical: 5,
+    },
+    primaryNutrientValue: {
+      fontSize: 24,
+      fontFamily: 'BricolageGrotesque-Bold',
+      color: '#000000',
+      textAlign: 'center',
+    },
+    primaryNutrientProgressContainer: {
+      position: 'relative',
+      height: 6,
+      backgroundColor: 'rgba(0,0,0,0.2)',
+      borderRadius: 3,
+      marginVertical: 8,
+      overflow: 'hidden',
+    },
+    primaryNutrientProgressTrack: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'rgba(0,0,0,0.1)',
+    },
+    primaryNutrientProgressFill: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      bottom: 0,
+      backgroundColor: '#000000',
+      borderRadius: 3,
+    },
+    primaryNutrientLabel: {
+      fontSize: 13,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      color: '#000000',
+      textAlign: 'center',
+      marginTop: 2,
+      paddingBottom: 4, // Aggiunto padding inferiore
+    },
+
+    // Sezione secondaria per valori nutrizionali dettagliati
+    secondaryNutrientsSection: {
+      marginTop: 10,
+      paddingHorizontal: 5,
+    },
+    secondaryNutrientsTitle: {
+      fontSize: 18,
+      fontFamily: 'BricolageGrotesque-Bold',
+      color: BORDER_COLOR,
+      marginBottom: 15,
+      paddingLeft: 5,
+    },
+    secondaryNutrientsContainer: {
+      // Container per le righe secondarie
+    },
+    secondaryNutrientRowWrapper: {
+      position: 'relative',
+      marginBottom: 12,
+      height: 65, // Aumentato da 55 a 65 per il padding aggiuntivo
+    },
+    secondaryNutrientRowShadow: {
+      backgroundColor: BORDER_COLOR,
+      borderRadius: 12,
+      position: 'absolute',
+      top: SHADOW_OFFSET_VALUE-1, // Uso la costante globale invece di 1
+      left: SHADOW_OFFSET_VALUE-1, // Uso la costante globale invece di 1
+      width: '100%',
+      height: '100%',
+      zIndex: 0,
+    },
+    secondaryNutrientRowContainer: {
+      backgroundColor: CARD_BACKGROUND_COLOR,
+      borderRadius: 12,
+      borderWidth: CARD_BORDER_WIDTH, // Uso la costante globale invece di 1.5
+      borderColor: BORDER_COLOR,
+      width: '100%',
+      height: '100%',
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 16, // Aumentato da implicito a 16 per più respiro
+      position: 'relative',
+      zIndex: 1,
+    },
+    secondaryNutrientIcon: {
+      width: 35,
+      height: 35,
+      borderRadius: 17.5,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: 12,
+      borderWidth: 1.5,
+      borderColor: BORDER_COLOR,
+    },
+    secondaryNutrientContent: {
+      flex: 1,
+    },
+    secondaryNutrientInfo: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 4,
+    },
+    secondaryNutrientLabel: {
+      fontSize: 15,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      color: BORDER_COLOR,
+      flex: 1,
+    },
+    secondaryNutrientValue: {
+      fontSize: 14,
+      fontFamily: 'BricolageGrotesque-Medium',
+      color: BORDER_COLOR,
+    },
+    secondaryNutrientProgressContainer: {
+      position: 'relative',
+      height: 4,
+      backgroundColor: 'rgba(0,0,0,0.1)',
+      borderRadius: 2,
+      overflow: 'hidden',
+    },
+    secondaryNutrientProgressTrack: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: 'rgba(0,0,0,0.1)',
+    },
+    secondaryNutrientProgressFill: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      bottom: 0,
+      borderRadius: 2,
+      // Il colore viene settato dinamicamente in base al nutriente
+    },
   })
 
   // --- LOG CONDIZIONI DI RENDERING --- 
   // Rimuoviamo il log qui perché le variabili potrebbero non essere definite
   // console.log(...)
 
-  // Condizione aggiornata per mostrare la schermata di animazione/caricamento AI:
-  // - Caso normale: abbiamo dati iniziali, AI sta caricando e non abbiamo ancora risultati
-  // - Caso analisi foto: isPhotoAnalysis=true, abbiamo dati iniziali MA NON abbiamo ancora l'aiAnalysis
-  const shouldShowLoadingAnimation = (
-    (routeInitialProductData && isAiLoading && !aiAnalysis && !error && displayProductInfo) || 
-    (isPhotoAnalysis && routeInitialProductData && !error && displayProductInfo && !aiAnalysis)
-  );
 
-  // --- Rendering Logica --- Riorganizzata ---
-
-  // 1. Mostra LoadingAnimationScreen se AI sta caricando e abbiamo già i dati base
-  if (shouldShowLoadingAnimation) {
-    console.log("[DETAIL RENDER] Rendering LoadingAnimationScreen...");
-    // Passiamo direttamente displayProductInfo invece delle singole variabili estratte
-    return (
-        <LoadingAnimationScreen 
-            productData={displayProductInfo} // Passiamo l'intero oggetto
-            isAiStillLoading={isAiLoading} 
-            isPhotoAnalysis={isPhotoAnalysis} // Passa il parametro per distinguere l'analisi foto
-        />
-    );
-  }
 
   // 2. Se stiamo caricando i dati iniziali OPPURE se AI è attiva ma non abbiamo ancora i dati base 
   //    (es. navigazione da recenti senza dati pre-caricati)
@@ -2179,11 +2680,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
   const healthScoreForIcon = aiAnalysis?.healthScore ?? (displayProductInfo && 'health_score' in displayProductInfo ? displayProductInfo.health_score : undefined);
   const sustainabilityScoreForIcon = aiAnalysis?.sustainabilityScore ?? (displayProductInfo && 'sustainability_score' in displayProductInfo ? displayProductInfo.sustainability_score : undefined);
 
-  // Variabili per le calorie per porzione (prodotti con barcode)
-  let suggestedPortionGramsToShow: number | undefined = undefined;
-  let energyPer100g: number | undefined | null = undefined;
-  let portionCalories: number | undefined = undefined;
-  let displayPortionButton = false;
+  // Variabili per le calorie per porzione rimosse - campo suggestedPortionGrams eliminato
 
   // *** NUOVA LOGICA ROBUSTA PER CALORIE STIMATE ***
   // 1. Verifica se il prodotto corrente è stato analizzato con foto
@@ -2214,36 +2711,12 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       logCalories("Calorie stimate trovate in displayProductInfo:", caloriesEstimate);
     }
     
-    // Se non abbiamo trovato calorie stimate
-    if (!displayCaloriesEstimate) {
-      logCalories("Nessuna stima calorie trovata per il prodotto da analisi foto");
-    }
+    // Se non abbiamo trovato calorie stimate - log rimosso per evitare spam
   } else {
     logCalories("Prodotto NON identificato come analizzato con foto, non mostreremo calorie stimate");
   }
   
-  // Gestione porzione/calorie per prodotti con barcode (codice esistente)
-  if (aiAnalysis?.suggestedPortionGrams && aiAnalysis.suggestedPortionGrams > 0) {
-    suggestedPortionGramsToShow = aiAnalysis.suggestedPortionGrams;
-  } else if ('suggested_portion_grams' in displayProductInfo && typeof (displayProductInfo as ProductRecord).suggested_portion_grams === 'number' && (displayProductInfo as ProductRecord).suggested_portion_grams! > 0) {
-    suggestedPortionGramsToShow = (displayProductInfo as ProductRecord).suggested_portion_grams;
-  }
-
-  if (suggestedPortionGramsToShow) { // displayProductInfo è già garantito non null qui
-    const rawEnergy = getNutrimentValue('energy_kcal_100g');
-    if (typeof rawEnergy === 'number') {
-      energyPer100g = rawEnergy;
-      portionCalories = Math.round((energyPer100g / 100) * suggestedPortionGramsToShow);
-      displayPortionButton = true;
-    } else if (typeof rawEnergy === 'string') {
-      const parsedEnergy = parseFloat(rawEnergy);
-      if (!isNaN(parsedEnergy)) {
-        energyPer100g = parsedEnergy;
-        portionCalories = Math.round((energyPer100g / 100) * suggestedPortionGramsToShow);
-        displayPortionButton = true;
-      }
-    }
-  }
+  // Gestione porzione/calorie per prodotti con barcode rimossa - campo suggestedPortionGrams eliminato
   // Fine dichiarazioni variabili
 
   // --- Creazione Score Items --- 
@@ -2268,7 +2741,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       originalValue: gradeUpper,
       scale: ['A', 'B', 'C', 'D', 'E'], // La scala visualizzata rimane A-E
       valueType: 'letter',
-      aiExplanation: aiAnalysis?.nutriScoreExplanation ?? placeholderExplanation, 
+      aiExplanation: (!isPhotoAnalysis && aiAnalysis?.nutriScoreExplanation) ? aiAnalysis.nutriScoreExplanation : placeholderExplanation, 
     };
     if (classification === 'neutral') healthNeutralItems.push(nutriItem);
     else healthScoreItems.push(nutriItem); // Aggiungi a positivi/negativi salute
@@ -2291,7 +2764,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
             originalValue: novaValueNum, // Usiamo il numero
             scale: [1, 2, 3, 4],
             valueType: 'number',
-            aiExplanation: aiAnalysis?.novaExplanation ?? placeholderExplanation, 
+            aiExplanation: (!isPhotoAnalysis && aiAnalysis?.novaExplanation) ? aiAnalysis.novaExplanation : placeholderExplanation, 
         };
         if (classification === 'neutral') healthNeutralItems.push(novaItem);
         else healthScoreItems.push(novaItem); // Aggiungi a positivi/negativi salute
@@ -2313,7 +2786,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         originalValue: gradeUpper,
         scale: ['A', 'B', 'C', 'D', 'E'], // La scala visualizzata rimane A-E
         valueType: 'letter',
-        aiExplanation: aiAnalysis?.ecoScoreExplanation ?? placeholderExplanation, 
+        aiExplanation: (!isPhotoAnalysis && aiAnalysis?.ecoScoreExplanation) ? aiAnalysis.ecoScoreExplanation : placeholderExplanation, 
     };
      if (classification === 'neutral') sustainabilityNeutralItems.push(ecoItem);
     else sustainabilityScoreItems.push(ecoItem); // Aggiungi a positivi/negativi eco
@@ -2360,7 +2833,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     
     // Aggiungi gli ScoreItem negativi
     ...healthScoreItems.filter(item => item.classification === 'negative'),
-    // Aggiungi classification='negative' ai cons standard
+     // Aggiungi classification='negative' ai cons standard
     ...(aiAnalysis?.cons ? parseJsonArrayField(aiAnalysis.cons).map(item => ({ ...item, classification: 'negative' as const })) : []),
   ];
 
@@ -2368,7 +2841,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
   const allEcoItems = [
     // Aggiungi classification='positive' ai pro standard
     ...(aiAnalysis?.sustainabilityPros ? parseJsonArrayField(aiAnalysis.sustainabilityPros).map(item => ({ ...item, classification: 'positive' as const })) : []),
-    // Aggiungi gli ScoreItem positivi
+     // Aggiungi gli ScoreItem positivi
     ...sustainabilityScoreItems.filter(item => item.classification === 'positive'),
     
     // Aggiungi classification='neutral' ai neutrals standard
@@ -2376,9 +2849,9 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     // Aggiungi gli ScoreItem neutri
     ...sustainabilityNeutralItems,
     
-    // Aggiungi gli ScoreItem negativi
+     // Aggiungi gli ScoreItem negativi
     ...sustainabilityScoreItems.filter(item => item.classification === 'negative'),
-    // Aggiungi classification='negative' ai cons standard
+     // Aggiungi classification='negative' ai cons standard
     ...(aiAnalysis?.sustainabilityCons ? parseJsonArrayField(aiAnalysis.sustainabilityCons).map(item => ({ ...item, classification: 'negative' as const })) : []),
   ];
 
@@ -2605,7 +3078,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
           <Text style={styles.ingredientsEditorTitle}>Componenti del pasto</Text>
           <View style={{flexDirection: 'row'}}>
             {isSavingIngredients && (
-              <ActivityIndicator size="small" color={colors.primary} />
+                    <ActivityIndicator size="small" color={colors.primary} />
             )}
           </View>
         </View>
@@ -2619,7 +3092,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               <View style={{ flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingBottom: 8, marginBottom: 5, paddingTop: 20 }}>
 
                 <Text style={styles.quantityPrefixText}>x{ingredient.quantity || 1}</Text>
-                <Text style={styles.ingredientNameText}>{ingredient.name}</Text>
+              <Text style={styles.ingredientNameText}>{ingredient.name}</Text>
               </View>
               
               {/* Riga con grammi, kcal e pulsante elimina */}
@@ -2673,9 +3146,9 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                       )}
                     </View>
                   </TouchableOpacity>
-                  
-                  {/* Calorie (senza container) */}
-                  <Text style={styles.ingredientCaloriesText}>~{Math.round(ingredient.estimated_calories_kcal)} kcal</Text>
+                
+                {/* Calorie (senza container) */}
+                <Text style={styles.ingredientCaloriesText}>~{Math.round(ingredient.estimated_calories_kcal)} kcal</Text>
                 </View>
                 
                 {/* Icona cestino semplice */}
@@ -2719,7 +3192,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               {/* Nome componente con hint chiaro */}
               <View style={{marginBottom: 16}}>
                 <Text style={{fontSize: 14, color: colors.textMuted, marginBottom: 6, fontFamily: 'BricolageGrotesque-Regular'}}>Cosa aggiungi?</Text>
-                <TextInput 
+              <TextInput 
                   style={{
                     borderWidth: 1,
                     borderColor: '#ddd',
@@ -2732,12 +3205,12 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                     backgroundColor: '#fafafa'
                   }}
                   placeholder="es. Petto di pollo, insalata, mozzarella..."
-                  value={newIngredientName}
-                  onChangeText={setNewIngredientName}
+                value={newIngredientName}
+                onChangeText={setNewIngredientName}
                   placeholderTextColor={'#aaa'}
                   autoFocus={true}
                   onFocus={() => scrollToActiveComponent('new-ingredient-form')}
-                />
+              />
               </View>
               
               {/* Riga con quantità e peso */}
@@ -2746,7 +3219,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                 <View style={{flex: 1}}>
                   <Text style={{fontSize: 14, color: colors.textMuted, marginBottom: 6, fontFamily: 'BricolageGrotesque-Regular'}}>Quantità</Text>
                   <View style={{flexDirection: 'row', borderWidth: 1, borderColor: '#ddd', borderRadius: 8, backgroundColor: '#fafafa', alignItems: 'center', overflow: 'hidden'}}>
-                    <TextInput
+                <TextInput
                       style={{paddingHorizontal: 12, paddingVertical: 10, fontSize: 16, color: BORDER_COLOR, fontFamily: 'BricolageGrotesque-Regular', flex: 1}}
                       value={newIngredientQuantity}
                       onChangeText={setNewIngredientQuantity}
@@ -2790,14 +3263,14 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                   <View style={{flexDirection: 'row', borderWidth: 1, borderColor: '#ddd', borderRadius: 8, backgroundColor: '#fafafa', alignItems: 'center', paddingHorizontal: 12}}>
                     <TextInput
                       style={{paddingVertical: 10, paddingRight: 4, fontSize: 16, color: BORDER_COLOR, fontFamily: 'BricolageGrotesque-Regular', flex: 1}}
-                      value={newIngredientWeight}
-                      onChangeText={setNewIngredientWeight}
-                      keyboardType="numeric"
+                  value={newIngredientWeight}
+                  onChangeText={setNewIngredientWeight}
+                  keyboardType="numeric"
                       placeholder="100"
                       placeholderTextColor={'#aaa'}
                       selectTextOnFocus={true}
                       onFocus={() => scrollToActiveComponent('new-ingredient-form')}
-                    />
+                />
                     <Text style={{fontSize: 16, color: colors.textMuted, fontFamily: 'BricolageGrotesque-Regular'}}>g</Text>
                   </View>
                 </View>
@@ -2811,13 +3284,13 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               {/* Pulsante aggiungi */}
               <View style={{position: 'relative', marginBottom: 8}}>
                 <View style={{position: 'absolute', top: 3, left: 3, backgroundColor: BORDER_COLOR, width: '100%', height: '100%', borderRadius: 8, zIndex: 0}} />
-                <TouchableOpacity 
+                  <TouchableOpacity 
                   style={{flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary, borderRadius: 8, paddingVertical: 12, paddingHorizontal: 16, borderWidth: 1, borderColor: BORDER_COLOR, position: 'relative', zIndex: 1}}
-                  onPress={handleConfirmAddIngredient}
-                >
+                    onPress={handleConfirmAddIngredient}
+                  >
                   <Ionicons name="checkmark-circle" size={22} color="#000" style={{marginRight: 8}} />
                   <Text style={{color: '#fff', fontSize: 16, fontWeight: '600', fontFamily: 'BricolageGrotesque-SemiBold'}}>Aggiungi al pasto</Text>
-                </TouchableOpacity>
+                  </TouchableOpacity>
               </View>
             </View>
           </View>
@@ -2868,38 +3341,38 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
 
     try {
       // Chiamata alla funzione aggiornata che restituisce un oggetto SingleIngredientEstimateResponse
-      const aiResponse = await getCaloriesForSingleIngredientFromGemini(name, weightForAI);
+      const aiResponse = await getCaloriesForSingleIngredientFromGeminiAiSdk(name, weightForAI);
 
-      if (aiResponse.error || aiResponse.calories === null) {
-        console.error("[ADD INGREDIENT AI ERROR]", aiResponse.errorMessage);
+      if (!aiResponse.success || aiResponse.estimated_calories_kcal === null || aiResponse.estimated_calories_kcal === undefined) {
+        console.error("[ADD INGREDIENT AI ERROR]", aiResponse.error_message);
         Alert.alert(
           "Componente non registrato!", 
-          aiResponse.errorMessage || "L'AI non è riuscita a elaborare questo componente."
+          aiResponse.error_message || "L'AI non è riuscita a elaborare questo componente."
         );
       } else {
         const newId = `user_${Date.now()}`;
-        // Usa il nome corretto dall'AI, se disponibile, altrimenti il nome inserito dall'utente.
-        const finalName = aiResponse.correctedName || name;
+        // Usa il nome inserito dall'utente
+        const finalName = name;
         // Il peso da salvare nell'oggetto ingrediente è quello che l'utente ha inserito (o 0 se lasciato vuoto per stima media).
         // Se l'utente ha lasciato vuoto, l'AI ha stimato per una porzione media; dobbiamo decidere quale peso visualizzare.
         // Per ora, usiamo il peso che l'AI avrebbe usato per la stima (se non specificato dall'utente, potrebbe essere un default o uno calcolato dall'AI).
         // Questa parte potrebbe necessitare di ulteriore logica se l'AI restituisce anche il peso della porzione media usata.
         // Ai fini del calcolo qui, usiamo il peso inserito dall'utente (o 0 se non inserito) perché le calorie sono già stimate per quel contesto.
-        const displayWeight = (weightString && !isNaN(weight) && weight > 0) ? weight : (aiResponse.calories && finalName ? 100 : 0); // Fallback a 100g se peso non dato ma calorie sì
+        const displayWeight = (weightString && !isNaN(weight) && weight > 0) ? weight : (aiResponse.estimated_calories_kcal && finalName ? 100 : 0); // Fallback a 100g se peso non dato ma calorie sì
 
         const newIngredient: EstimatedIngredient = {
           id: newId,
-          name: finalName, // Nome corretto dall'AI
+          name: finalName, // Nome inserito dall'utente
           estimated_weight_g: displayWeight, // Peso inserito o stimato
-          estimated_calories_kcal: aiResponse.calories, // Calorie dall'AI
+          estimated_calories_kcal: aiResponse.estimated_calories_kcal, // Calorie dall'AI
           quantity: quantity,
           // Aggiungi i nuovi valori nutrizionali
-          estimated_proteins_g: aiResponse.proteins || 0,
-          estimated_carbs_g: aiResponse.carbs || 0,
-          estimated_fats_g: aiResponse.fats || 0
+          estimated_proteins_g: aiResponse.estimated_proteins_g || 0,
+          estimated_carbs_g: aiResponse.estimated_carbs_g || 0,
+          estimated_fats_g: aiResponse.estimated_fats_g || 0
         };
         setEditableIngredients(prevIngredients => [...(prevIngredients || []), newIngredient]);
-        setTotalEstimatedCalories(prevTotal => (prevTotal || 0) + (aiResponse.calories! * quantity));
+        setTotalEstimatedCalories(prevTotal => (prevTotal || 0) + (aiResponse.estimated_calories_kcal! * quantity));
         logCalories("Nuovo ingrediente (AI processed) aggiunto e totale aggiornato", newIngredient);
         setHasUnsavedChanges(true);
         setTimeout(() => {
@@ -3105,15 +3578,48 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     }, 150); // Timeout leggermente aumentato per dare tempo alla UI di stabilizzarsi
   };
 
-  // Verifica se ci sono raccomandazioni da visualizzare
-  const hasRecommendations = Array.isArray(aiAnalysis?.recommendations) && 
-                             aiAnalysis.recommendations.length > 0 &&
-                             aiAnalysis.recommendations.some(item => item && item.trim() !== '');
-                             
-  // Stessa cosa per le raccomandazioni ambientali
-  const hasSustainabilityRecommendations = Array.isArray(aiAnalysis?.sustainabilityRecommendations) && 
-                                           aiAnalysis.sustainabilityRecommendations.length > 0 &&
-                                           aiAnalysis.sustainabilityRecommendations.some(item => item && item.trim() !== '');
+  // Componente Skeleton per i punteggi
+  const ScoreSkeleton = () => (
+    <View style={styles.scoreSkeletonContainer}>
+      <View style={styles.scoreSkeletonTitle} />
+      <View style={styles.scoreSkeletonValue} />
+    </View>
+  );
+
+  // Componente Skeleton per la descrizione
+  const DescriptionSkeleton = () => (
+    <View style={styles.descriptionSkeletonContainer}>
+      <View style={styles.descriptionSkeletonLine} />
+      <View style={[styles.descriptionSkeletonLine, { width: '80%' }]} />
+      <View style={[styles.descriptionSkeletonLine, { width: '60%' }]} />
+    </View>
+  );
+
+  // Componente per l'animazione di caricamento con effetto glowing
+  const LoadingAnimation = () => {
+    const [glowOpacity, setGlowOpacity] = useState(0.3);
+    
+    useEffect(() => {
+      const glowInterval = setInterval(() => {
+        setGlowOpacity(prev => prev === 0.3 ? 0.8 : 0.3);
+      }, 1000);
+      
+      return () => clearInterval(glowInterval);
+    }, []);
+    
+    return (
+      <View style={styles.loadingAnimationContainer}>
+        <View style={[styles.loadingCard, { backgroundColor: '#FFFFFF' }]}>
+          <View style={styles.loadingContent}>
+            <ActivityIndicator size="large" color={colors.primary} style={styles.loadingSpinner} />
+            <Text style={styles.loadingMessage}>{currentLoadingMessage}</Text>
+          </View>
+        </View>
+      </View>
+    );
+  };
+
+  // Rimosso il codice per le raccomandazioni
 
   // Riaggiunta della funzione renderNutritionTable
   const renderNutritionTable = (): React.ReactNode => {
@@ -3133,27 +3639,31 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     } else if (isComposedMeal) {
       tableTitle = "Valori Nutrizionali del pasto (Stime AI)";
     }
-    const nutritionFields: Array<{ label: string; key: keyof ProductRecord | keyof NonNullable<RawProductData['nutriments']>; unit: string }> = [
-      { label: "Energia", key: "energy_kcal_100g", unit: "kcal" }, // O energy_100g per kJ
-      { label: "Proteine", key: "proteins_100g", unit: "g" },
-      { label: "Carboidrati", key: "carbohydrates_100g", unit: "g" },
-      { label: "Grassi", key: "fat_100g", unit: "g" },
+    
+    const nutritionFields: Array<{ 
+      label: string; 
+      key: keyof ProductRecord | keyof NonNullable<RawProductData['nutriments']>; 
+      unit: string;
+      maxValue?: number; // Per calcolare la progress bar
+    }> = [
+      { label: "Energia", key: "energy_kcal_100g", unit: "kcal", maxValue: 900 },
+      { label: "Proteine", key: "proteins_100g", unit: "g", maxValue: 50 },
+      { label: "Carboidrati", key: "carbohydrates_100g", unit: "g", maxValue: 100 },
+      { label: "Grassi", key: "fat_100g", unit: "g", maxValue: 50 },
     ];
     
     // Solo per dati reali da OpenFoodFacts, mostra tutti i campi nutrizionali
     if (!isAiEstimated && !isCurrentProductFromPhotoAnalysis) {
       nutritionFields.push(
-        { label: "di cui Saturi", key: "saturated_fat_100g", unit: "g" },
-        { label: "di cui Zuccheri", key: "sugars_100g", unit: "g" },
-        { label: "Fibre", key: "fiber_100g", unit: "g" },
-        { label: "Sale", key: "salt_100g", unit: "g" }
+        { label: "di cui Saturi", key: "saturated_fat_100g", unit: "g", maxValue: 30 },
+        { label: "di cui Zuccheri", key: "sugars_100g", unit: "g", maxValue: 50 },
+        { label: "Fibre", key: "fiber_100g", unit: "g", maxValue: 25 },
+        { label: "Sale", key: "salt_100g", unit: "g", maxValue: 5 }
       );
     }
 
-    return (
-      <View style={styles.nutritionSection}>
-        <Text style={[styles.sectionTitle, { color: BORDER_COLOR, marginBottom: 15 }]}>{tableTitle}</Text>
-        {nutritionFields.map(field => {
+    // Preparazione dati per le cards
+    const nutritionData = nutritionFields.map(field => {
           let value;
           
           if (isComposedMeal && editableIngredients) {
@@ -3186,36 +3696,104 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
             }
           } else {
             // Per altri prodotti, usa i valori esistenti o stimati
-            value = getNutrimentValue(field.key);
+            if (isPackagedProduct && aiAnalysis) {
+              // Per prodotti imbustati da foto, usa i valori stimati dall'AI
+              if (field.key === "energy_kcal_100g") {
+                value = aiAnalysis.estimated_energy_kcal_100g;
+              } else if (field.key === "proteins_100g") {
+                value = aiAnalysis.estimated_proteins_100g;
+              } else if (field.key === "carbohydrates_100g") {
+                value = aiAnalysis.estimated_carbs_100g;
+              } else if (field.key === "fat_100g") {
+                value = aiAnalysis.estimated_fats_100g;
+              } else {
+                value = getNutrimentValue(field.key);
+              }
+            } else {
+              // Per prodotti con barcode o altri casi, usa i valori esistenti
+              value = getNutrimentValue(field.key);
+            }
           }
           
-          if (value === undefined || value === null) return null; // Non mostrare la riga se il valore non è disponibile
+      return {
+        ...field,
+        value: value !== undefined && value !== null ? value : null
+      };
+    }).filter(item => item.value !== null); // Filtra solo i valori disponibili
           
-          return (
-            <View key={field.key} style={styles.nutritionDataRow}>
-              {/* Icon Pill */}
-              <View style={styles.iconPillWrapper}>
-                <View style={styles.iconPillShadow} />
-                <View style={[styles.iconPillContainer, { backgroundColor: getNutrientIconColor(field.key) }]}>
-                  <Ionicons 
-                    name={getNutrientIconName(field.key) as any} 
-                    size={24} 
-                    color="#000000" 
-                  />
-                </View>
-              </View>
+    return (
+      <View style={styles.modernNutritionSection}>
+        {/* Titolo uniforme con gli altri titoli delle sezioni */}
+        <Text style={styles.scoreSectionTitle}>
+          {tableTitle}
+        </Text>
 
-              {/* Value Pill */}
-              <View style={styles.valuePillWrapper}>
-                <View style={styles.valuePillShadow} />
-                <View style={styles.valuePillContainer}>
-                  <Text style={styles.nutrientNameText}>{field.label}</Text>
-                  <Text style={styles.nutrientValueText}>{formatNutritionValue(value as number, field.unit)}</Text>
-                </View>
-              </View>
+        {/* Container principale moderno con tutti i valori nutrizionali */}
+        <View style={styles.nutritionMainCardWrapper}>
+          <View style={styles.nutritionMainCardShadow} />
+          <View style={[
+            styles.nutritionMainCardContainer,
+            { 
+              paddingBottom: nutritionData.some(n => ['saturated_fat_100g', 'sugars_100g', 'fiber_100g', 'salt_100g'].includes(n.key as string)) 
+                ? 16  // Padding normale quando ci sono valori secondari
+                : 5  // Padding medio quando ci sono solo valori principali
+            }
+          ]}>
+            <View style={styles.nutritionGridContainer}>
+              {nutritionData.map((nutrient, index) => {
+                const progressPercentage = nutrient.maxValue 
+                  ? Math.min((nutrient.value as number) / nutrient.maxValue * 100, 100) 
+                  : 0;
+                const iconColor = getNutrientIconColor(nutrient.key as string);
+                
+                // Determina se è un valore secondario (più piccolo)
+                const isSecondary = ['saturated_fat_100g', 'sugars_100g', 'fiber_100g', 'salt_100g'].includes(nutrient.key as string);
+                
+                return (
+                  <View 
+                    key={nutrient.key} 
+                    style={isSecondary ? styles.nutritionItemWrapperSecondary : styles.nutritionItemWrapper}
+                  >
+                    <View style={styles.nutritionItemContent}>
+                      {/* Icona colorata */}
+                      <View style={[
+                        isSecondary ? styles.nutritionIconContainerSecondary : styles.nutritionIconContainer,
+                        { backgroundColor: iconColor }
+                      ]}>
+                        <Ionicons 
+                          name={getNutrientIconName(nutrient.key as string) as any} 
+                          size={isSecondary ? 22 : 28} 
+                          color="#000000" 
+                        />
+                      </View>
+                      
+                      {/* Valore */}
+                      <Text style={isSecondary ? styles.nutritionValueTextSecondary : styles.nutritionValueText}>
+                        {formatNutritionValue(nutrient.value as number, nutrient.unit)}
+                      </Text>
+                      
+                      {/* Label */}
+                      <Text style={isSecondary ? styles.nutritionLabelTextSecondary : styles.nutritionLabelText}>
+                        {nutrient.label}
+                      </Text>
+                      
+                      {/* Progress bar */}
+                      <View style={styles.nutritionProgressContainer}>
+                        <View style={[
+                          styles.nutritionProgressFill,
+                          { 
+                            width: `${progressPercentage}%`,
+                            backgroundColor: iconColor
+                          }
+                        ]} />
+                      </View>
+                    </View>
+                  </View>
+                );
+              })}
             </View>
-          );
-        })}
+          </View>
+        </View>
       </View>
     );
   };
@@ -3266,208 +3844,156 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         </View>
 
                     <View style={styles.topCardContent}>
-                        <Text style={styles.topCardProductName} numberOfLines={2}>
+                        {/* Nome prodotto con effetto loading per analisi foto */}
+                        {isPhotoAnalysis && productRecordId === "temp_visual_scan" && !aiAnalysis ? (
+                          <View style={styles.skeletonTextContainer}>
+                            <View style={[styles.skeletonText, { width: '80%', height: 24 }]} />
+                          </View>
+                        ) : (
+                          <Text style={styles.topCardProductName} numberOfLines={2}>
                             {productName || "Nome non disponibile"}
-                        </Text>
-                        <Text style={styles.topCardBrandName} numberOfLines={1}>
-                            {brandName || "Marca non disponibile"}
-                        </Text>
+                          </Text>
+                        )}
                         
+                        {/* Marca con effetto loading per analisi foto */}
+                        {isPhotoAnalysis && productRecordId === "temp_visual_scan" && !aiAnalysis ? (
+                          <View style={styles.skeletonTextContainer}>
+                            <View style={[styles.skeletonText, { width: '60%', height: 18, marginTop: 8 }]} />
+                          </View>
+                        ) : (
+                          <Text style={styles.topCardBrandName} numberOfLines={1}>
+                            {brandName || "Marca non disponibile"}
+                          </Text>
+                        )}
+                        
+                        {/* Punteggi o Skeleton */}
                         <View style={styles.scoresRowContainer}>
-                            {healthScoreForIcon !== undefined && (
-                            <View style={styles.scoreIconTextContainer}>
-                                <Ionicons 
+                          {((isProductFromBarcodeScan && isAiLoading && !aiAnalysis) || 
+                            (isPhotoAnalysis && productRecordId === "temp_visual_scan" && !aiAnalysis)) ? (
+                            // Mostra skeleton per i punteggi durante il caricamento
+                            <>
+                              <ScoreSkeleton />
+                              <ScoreSkeleton />
+                            </>
+                          ) : (
+                            // Mostra i punteggi reali
+                            <>
+                              {healthScoreForIcon !== undefined && (
+                                <View style={styles.scoreIconTextContainer}>
+                                  <Ionicons 
                                     name="heart" 
                                     size={18} 
                                     color={getScoreColorForIcon(nutritionGrade, 'nutri', healthScoreForIcon)} 
                                     style={styles.scoreIconStyle} 
-                                />
-                                <Text style={styles.scoreValueStyle}>
-                                {healthScoreForIcon}
-                                </Text>
-      </View>
-                            )}
-
-                            {(sustainabilityScoreForIcon !== undefined && !isCurrentProductFromPhotoAnalysis) && (
+                                  />
+                                  <Text style={styles.scoreValueStyle}>
+                                    {healthScoreForIcon}
+                                  </Text>
+                                </View>
+                              )}
+                              {(sustainabilityScoreForIcon !== undefined && !isCurrentProductFromPhotoAnalysis) && (
                                 <View style={[styles.scoreIconTextContainer, { marginLeft: healthScoreForIcon !== undefined ? 15 : 0} ]}>
-                                    <Ionicons 
-                                        name="leaf" 
-                                        size={18} 
-                                        color={getScoreColorForIcon(currentEcoScoreGrade, 'eco', sustainabilityScoreForIcon)} 
-                                        style={styles.scoreIconStyle}
-                                    />
-                                    <Text style={styles.scoreValueStyle}>
-                                        {sustainabilityScoreForIcon}
-                                    </Text>
-          </View>
-        )}
-            </View>
+                                  <Ionicons 
+                                    name="leaf" 
+                                    size={18} 
+                                    color={getScoreColorForIcon(currentEcoScoreGrade, 'eco', sustainabilityScoreForIcon)} 
+                                    style={styles.scoreIconStyle}
+                                  />
+                                  <Text style={styles.scoreValueStyle}>
+                                    {sustainabilityScoreForIcon}
+                                  </Text>
+                                </View>
+                              )}
+                            </>
+                          )}
+                        </View>
           </View>
                 </View>
                 
-                {aiAnalysis && aiAnalysis.analysis && aiAnalysis.analysis.trim() !== "" && (
+                {/* Descrizione o Skeleton */}
+                {isProductFromBarcodeScan && isAiLoading && !aiAnalysis ? (
+                  <DescriptionSkeleton />
+                ) : (
+                  aiAnalysis && aiAnalysis.analysis && aiAnalysis.analysis.trim() !== "" && (
                     <Text style={styles.topCardProductSummaryText}>
-                        {aiAnalysis.analysis}
+                      {aiAnalysis.analysis}
                     </Text>
-        )}
+                  )
+                )}
             </View>
       </View>
       
-        {/* SPOSTATA QUI: Tabella valori nutrizionali (solo per prodotti con barcode) */}
-        {/* Mostra tabella dei valori nutrizionali per tutti i tipi di prodotti */}
-        {hasNutritionData() && (
-          <View style={{marginTop: 20}}>
-            {renderNutritionTable()}
-          </View>
-        )}
-      
-        {/* Mostra le calorie stimate per prodotti analizzati tramite foto */}
-        {(() => {
-          logCalories(`RENDER - Calorie stimate: isCurrentProductFromPhotoAnalysis=${isCurrentProductFromPhotoAnalysis}, displayCaloriesEstimate=${displayCaloriesEstimate}, caloriesEstimate=${caloriesEstimate}`);
-          
-          // ✓ NUOVO: Mostra sempre la pillola se il prodotto è da analisi foto e abbiamo una stima
-          if (isCurrentProductFromPhotoAnalysis && displayCaloriesEstimate && caloriesEstimate) {
-            logCalories("RENDER - Mostro pillola calorie stimate");
-            return (
-              <View style={styles.portionDetailRow}>
-                <View style={styles.portionIconPillWrapper}>
-                  <View style={styles.portionIconPillShadow} />
-                  <View style={styles.portionIconPillContainer}>
-                    <Ionicons 
-                      name={'flame'} 
-                      size={24} 
-                      color={'#000000'}
-                    />
-                  </View>
-                </View>
+      {/* Animazione di caricamento per prodotti con barcode E analisi foto */}
+      {showLoadingAnimation && (
+        <View style={{ marginVertical: 10 }}>
+          <LoadingAnimation />
+        </View>
+      )}
 
-                <View style={styles.portionValuePillWrapper}>
-                  <View style={styles.portionValuePillShadow} />
-                  <View style={styles.portionValuePillContainer}>
-                    <Text style={styles.portionValueText}>
-                      {`${caloriesEstimate}`}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            );
-          } else {
-            logCalories("RENDER - NON mostro pillola calorie stimate");
-            return null;
-          }
-        })()}
+      {/* Editor ingredienti per prodotti da foto */}
+      {isCurrentProductFromPhotoAnalysis && renderIngredientsEditor()}
           
-        {/* NUOVA POSIZIONE: Editor degli ingredienti subito dopo la pillola delle calorie */}
-        {isCurrentProductFromPhotoAnalysis && renderIngredientsEditor()}
-          
-        {/* Sezione Analisi AI (Punteggi Salute/Eco 1-100 e dettagli) */}
-        {showAiScores ? (
-          <View style={styles.aiSectionWrapper}>
-            {/* Punteggio Salute Numerico */} 
-            {aiAnalysis.healthScore !== undefined && (
+        {/* Sezione Analisi AI - Solo se NON c'è animazione di caricamento */}
+        {showAiScores && !showLoadingAnimation ? (
+          <View style={[styles.aiSectionWrapper, { marginTop: isProductFromBarcodeScan ? 35 : 20 }]}>
+                {/* Punteggio Salute Numerico */} 
+                {aiAnalysis.healthScore !== undefined && (
               <View style={{ marginBottom: 16 }}>
                 <Text style={styles.scoreSectionTitle}>Punteggio Salute</Text>
                 <View style={styles.scoreRowContainer}>
                   <View style={styles.numericScoreColumn}>
                     <View style={styles.scoreSquareCardWrapper}>
-                      {/* UNIFORM SHADOW/BORDER */}
-                      <View style={styles.scoreSquareCardShadow} /> 
-                      <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(nutritionGrade, 'nutri', aiAnalysis.healthScore) }]}>
+                                    {/* UNIFORM SHADOW/BORDER */}
+                                    <View style={styles.scoreSquareCardShadow} /> 
+                                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(nutritionGrade, 'nutri', aiAnalysis.healthScore) }]}>
                         <Text style={styles.scoreValueTextLarge}>{aiAnalysis.healthScore}</Text>
-                      </View>
+        </View>
                     </View>
                   </View>
                 </View>
               </View>
-            )}
+                )}
 
-            {/* Dettagli Salute: Lista unica */} 
-            {renderItemList(allHealthItems)}
-            
-            {/* Punteggio Eco Numerico - NON MOSTRARE SE ANALISI FOTO */} 
-            {aiAnalysis.sustainabilityScore !== undefined && !isCurrentProductFromPhotoAnalysis && (
-              <View style={{marginTop: 30, marginBottom: 16}}> 
+                {/* Dettagli Salute: Lista unica */} 
+                {renderItemList(allHealthItems)}
+                
+                 {/* Punteggio Eco Numerico - NON MOSTRARE SE ANALISI FOTO */} 
+                {aiAnalysis.sustainabilityScore !== undefined && !isCurrentProductFromPhotoAnalysis && (
+                    <View style={{marginTop: 30, marginBottom: 16}}> 
                 <Text style={styles.scoreSectionTitle}>Punteggio Eco</Text>
                 <View style={styles.scoreRowContainer}>
                   <View style={styles.numericScoreColumn}>
                     <View style={styles.scoreSquareCardWrapper}>
-                      {/* UNIFORM SHADOW/BORDER */}
-                      <View style={styles.scoreSquareCardShadow} /> 
-                      <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(currentEcoScoreGrade, 'eco', aiAnalysis.sustainabilityScore) }]}> 
+                                     {/* UNIFORM SHADOW/BORDER */}
+                                    <View style={styles.scoreSquareCardShadow} /> 
+                                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(currentEcoScoreGrade, 'eco', aiAnalysis.sustainabilityScore) }]}> 
                         <Text style={styles.scoreValueTextLarge}>{aiAnalysis.sustainabilityScore}</Text>
-                      </View>
-                    </View>
-                  </View>
+            </View>
+                </View>
+          </View>
                 </View>
               </View>
-            )}
+                )}
 
-            {/* Dettagli Eco: Lista unica - NON MOSTRARE SE ANALISI FOTO */} 
-            {!isCurrentProductFromPhotoAnalysis && renderItemList(allEcoItems)}
+                 {/* Dettagli Eco: Lista unica - NON MOSTRARE SE ANALISI FOTO */} 
+                {!isCurrentProductFromPhotoAnalysis && renderItemList(allEcoItems)}
           </View>
         ) : null}
 
-        {/* RIMOSSO: Eliminata la sezione renderNutritionTable() che era qui */}
-
-        {/* Sezione Punteggi Salute e Sostenibilità (condizionale per foto) */}
-        <View style={styles.scoresRow}> 
-          {/* Card Punteggio Salute */} 
-          {(healthScoreForIcon !== undefined && aiAnalysis) && ( // Aggiunto controllo aiAnalysis
-            <View style={styles.scoreCardContainer}>
-              <Text style={styles.scoreSectionTitle}>Punteggio Salute</Text>
-              <View style={styles.scoreRowContainer}>
-                <View style={styles.numericScoreColumn}>
-                  <View style={styles.scoreSquareCardWrapper}>
-                    {/* UNIFORM SHADOW/BORDER */}
-                    <View style={styles.scoreSquareCardShadow} /> 
-                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(nutritionGrade, 'nutri', aiAnalysis.healthScore) }]}>
-                      <Text style={styles.scoreValueTextLarge}>{aiAnalysis.healthScore}</Text>
-                    </View>
-                  </View>
-                </View>
-              </View>
-            </View>
-          )}
-
-          {/* Card Punteggio Eco */}
-          {(sustainabilityScoreForIcon !== undefined && !isCurrentProductFromPhotoAnalysis && aiAnalysis) && ( // Aggiunto controllo aiAnalysis
-            <View style={styles.scoreCardContainer}>
-              <Text style={styles.scoreSectionTitle}>Punteggio Eco</Text>
-              <View style={styles.scoreRowContainer}>
-                <View style={styles.numericScoreColumn}>
-                  <View style={styles.scoreSquareCardWrapper}>
-                    {/* UNIFORM SHADOW/BORDER */}
-                    <View style={styles.scoreSquareCardShadow} /> 
-                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(currentEcoScoreGrade, 'eco', aiAnalysis.sustainabilityScore) }]}> 
-                      <Text style={styles.scoreValueTextLarge}>{aiAnalysis.sustainabilityScore}</Text>
-                    </View>
-                  </View>
-                </View>
-              </View>
-            </View>
-          )}
-        </View>
-
-        {/* Raccomandazioni Salute e Sostenibilità (se presenti) */}
-        {hasRecommendations && (
-          <View style={{marginTop: 16, paddingHorizontal: 16}}>
-            <Text style={{fontSize: 18, fontWeight: '600', color: colors.text, marginBottom: 12, fontFamily: 'BricolageGrotesque-Bold'}}>
-              Consigli per migliorare
-            </Text>
-            {aiAnalysis?.recommendations.map((recommendation, index) => (
-              recommendation && recommendation.trim() !== '' && (
-                <View key={`recommendation-${index}`} style={{flexDirection: 'row', alignItems: 'flex-start', marginBottom: 8}}>
-                  <View style={{width: 24, alignItems: 'center'}}>
-                    <Ionicons name="chevron-forward" size={16} color={colors.primary} />
-                  </View>
-                  <Text style={{flex: 1, color: colors.text, fontSize: 15, fontFamily: 'BricolageGrotesque-Regular'}}>{recommendation}</Text>
-                </View>
-              )
-            ))}
+        {/* Valori nutrizionali per prodotti da analisi foto - PRIMA dell'analisi AI */}
+        {isCurrentProductFromPhotoAnalysis && hasNutritionData() && (
+          <View style={{marginTop: 20}}>
+            {renderNutritionTable()}
           </View>
         )}
 
-    </ScrollView>
+        {/* Valori nutrizionali per prodotti con barcode - DOPO l'analisi AI */}
+        {isProductFromBarcodeScan && hasNutritionData() && (aiAnalysis || !isAiLoading) && (
+          <View style={{marginTop: 30}}>
+            {renderNutritionTable()}
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 };

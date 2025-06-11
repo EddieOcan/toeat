@@ -1,6 +1,13 @@
 import { supabase } from "../lib/supabase"
-import { analyzeProductWithGemini, type GeminiAnalysisResult, type EstimatedIngredient } from "./gemini"
-import { analyzeImageWithGeminiVision } from './gemini'
+import { 
+  analyzeProductWithGeminiAiSdk as analyzeProductWithGemini,
+  analyzeImageWithGeminiVisionAiSdk as analyzeImageWithGeminiVision,
+  getCaloriesForSingleIngredientFromGeminiAiSdk as getCaloriesForSingleIngredientFromGemini,
+  analyzeProductWithUserPreferences,
+  type GeminiAnalysisResult, 
+  type EstimatedIngredient,
+  type SingleIngredientEstimateResponse
+} from './gemini'
 import * as FileSystem from 'expo-file-system'; // Assicurati che sia importato
 // import { decode } from 'base64-js'
 
@@ -85,12 +92,10 @@ export interface ProductRecord {
   health_analysis?: string;
   health_pros?: Array<{title: string, detail: string}>;
   health_cons?: Array<{title: string, detail: string}>;
-  health_recommendations?: string[];
-  sustainability_analysis?: string;
+
   sustainability_pros?: Array<{title: string, detail: string}>;
   sustainability_cons?: Array<{title: string, detail: string}>;
-  sustainability_recommendations?: string[];
-  suggested_portion_grams?: number;
+  sustainability_neutrals?: Array<{title: string, detail: string}>;
   nutri_score_explanation?: string; // AGGIUNTO
   nova_explanation?: string;        // AGGIUNTO
   eco_score_explanation?: string;   // AGGIUNTO
@@ -117,6 +122,12 @@ export interface ProductRecord {
   sugars_100g?: number;
   fiber_100g?: number;
   saturated_fat_100g?: number;
+  
+  // Campi nutrizionali stimati dall'AI (per prodotti confezionati fotografati)
+  estimated_energy_kcal_100g?: number;
+  estimated_proteins_100g?: number;
+  estimated_carbs_100g?: number;
+  estimated_fats_100g?: number;
   
   is_visually_analyzed?: boolean; // True se il prodotto è stato aggiunto tramite analisi di immagine senza barcode
   created_at: string;
@@ -206,8 +217,96 @@ export const uploadProductImage = async (
 
 
 /**
+ * Pulisce la cronologia dell'utente mantenendo solo gli ultimi 15 prodotti.
+ * I prodotti più vecchi vengono eliminati dalla cronologia E dal database
+ * SOLO se NON sono nei preferiti dell'utente.
+ */
+const cleanupUserHistory = async (userId: string): Promise<void> => {
+  try {
+    console.log(`[CLEANUP] Inizio pulizia cronologia per utente ${userId}`);
+    
+    // 1. Recupera tutti i prodotti nella cronologia dell'utente ordinati per data di scansione
+    const { data: allHistoryEntries, error: historyError } = await supabase
+      .from("user_scan_history")
+      .select(`
+        id,
+        product_id,
+        scanned_at
+      `)
+      .eq("user_id", userId)
+      .order("scanned_at", { ascending: false });
+
+    if (historyError) {
+      console.error("[CLEANUP ERROR] Errore nel recupero della cronologia completa:", historyError);
+      return;
+    }
+
+    if (!allHistoryEntries || allHistoryEntries.length <= 15) {
+      console.log(`[CLEANUP] Cronologia ha ${allHistoryEntries?.length || 0} elementi, pulizia non necessaria.`);
+      return;
+    }
+
+    // 2. Identifica i prodotti da eliminare (oltre i primi 15)
+    const productsToRemove = allHistoryEntries.slice(15);
+    console.log(`[CLEANUP] Trovati ${productsToRemove.length} prodotti da rimuovere dalla cronologia.`);
+
+    // 3. Per ogni prodotto da rimuovere, controlla se è nei preferiti
+    for (const historyEntry of productsToRemove) {
+      const isInFavorites = await isProductInFavorites(userId, historyEntry.product_id);
+      
+      // Rimuovi dalla cronologia
+      const { error: removeHistoryError } = await supabase
+        .from("user_scan_history")
+        .delete()
+        .eq("id", historyEntry.id);
+
+      if (removeHistoryError) {
+        console.error(`[CLEANUP ERROR] Errore rimozione cronologia per ${historyEntry.product_id}:`, removeHistoryError);
+        continue;
+      }
+      
+      console.log(`[CLEANUP] Rimosso dalla cronologia: ${historyEntry.product_id}`);
+
+      // Se NON è nei preferiti, elimina anche il prodotto dal database
+      if (!isInFavorites) {
+        // Prima recupera il prodotto per ottenere l'URL dell'immagine
+        const { data: productToDelete, error: fetchError } = await supabase
+          .from("products")
+          .select("product_image")
+          .eq("id", historyEntry.product_id)
+          .single();
+
+        if (!fetchError && productToDelete?.product_image) {
+          // Elimina l'immagine dallo storage
+          await deleteImageFromStorage(productToDelete.product_image);
+        }
+
+        // Elimina il prodotto dalla tabella products
+        const { error: deleteProductError } = await supabase
+          .from("products")
+          .delete()
+          .eq("id", historyEntry.product_id);
+
+        if (deleteProductError) {
+          console.error(`[CLEANUP ERROR] Errore eliminazione prodotto ${historyEntry.product_id}:`, deleteProductError);
+        } else {
+          console.log(`[CLEANUP] Eliminato dal database prodotto NON nei preferiti: ${historyEntry.product_id}`);
+        }
+      } else {
+        console.log(`[CLEANUP] Prodotto ${historyEntry.product_id} mantenuto nel database (è nei preferiti).`);
+      }
+    }
+
+    console.log(`[CLEANUP] Pulizia cronologia completata per utente ${userId}.`);
+
+  } catch (error) {
+    console.error(`[CLEANUP ERROR] Errore durante la pulizia cronologia per utente ${userId}:`, error);
+  }
+};
+
+/**
  * Salva un nuovo prodotto scansionato/analizzato nel database,
- * lo aggiunge alla cronologia dell'utente e gestisce il limite di 10 elementi nella cronologia.
+ * lo aggiunge alla cronologia dell'utente e gestisce il limite di 15 elementi nella cronologia.
  */
 export const saveProductAndManageHistory = async (
   userId: string,
@@ -260,15 +359,18 @@ export const saveProductAndManageHistory = async (
       productUpsertPayload.health_analysis = aiAnalysis.analysis;
       productUpsertPayload.health_pros = aiAnalysis.pros;
       productUpsertPayload.health_cons = aiAnalysis.cons;
-      productUpsertPayload.health_recommendations = aiAnalysis.recommendations;
-      productUpsertPayload.sustainability_analysis = aiAnalysis.sustainabilityAnalysis;
+  
+  
       productUpsertPayload.sustainability_pros = aiAnalysis.sustainabilityPros;
       productUpsertPayload.sustainability_cons = aiAnalysis.sustainabilityCons;
-      productUpsertPayload.sustainability_recommendations = aiAnalysis.sustainabilityRecommendations;
-      productUpsertPayload.suggested_portion_grams = aiAnalysis.suggestedPortionGrams;
+      productUpsertPayload.sustainability_neutrals = aiAnalysis.sustainabilityNeutrals;
+      
+      // Salva spiegazioni score solo per prodotti con barcode (non per analisi foto)
+      if (!isVisualScan) {
       productUpsertPayload.nutri_score_explanation = aiAnalysis.nutriScoreExplanation;
       productUpsertPayload.nova_explanation = aiAnalysis.novaExplanation;
       productUpsertPayload.eco_score_explanation = aiAnalysis.ecoScoreExplanation;
+      }
       productUpsertPayload.calories_estimate = aiAnalysis.calories_estimate;
       
       // --- NUOVE AGGIUNTE CRUCIALI ---
@@ -278,6 +380,24 @@ export const saveProductAndManageHistory = async (
         : undefined;
       console.log(`[API SAVE UPSERT] Aggiunto calorie_estimation_type: ${aiAnalysis.calorie_estimation_type}`);
       console.log(`[API SAVE UPSERT] Aggiunto ingredients_breakdown (stringified): ${productUpsertPayload.ingredients_breakdown !== undefined}`);
+      
+      // NUOVO: Salvataggio valori nutrizionali stimati dall'AI per analisi foto
+      if (isVisualScan && aiAnalysis.estimated_energy_kcal_100g !== undefined) {
+        productUpsertPayload.estimated_energy_kcal_100g = aiAnalysis.estimated_energy_kcal_100g;
+        console.log(`[API SAVE UPSERT] Aggiunto estimated_energy_kcal_100g: ${aiAnalysis.estimated_energy_kcal_100g}`);
+      }
+      if (isVisualScan && aiAnalysis.estimated_proteins_100g !== undefined) {
+        productUpsertPayload.estimated_proteins_100g = aiAnalysis.estimated_proteins_100g;
+        console.log(`[API SAVE UPSERT] Aggiunto estimated_proteins_100g: ${aiAnalysis.estimated_proteins_100g}`);
+      }
+      if (isVisualScan && aiAnalysis.estimated_carbs_100g !== undefined) {
+        productUpsertPayload.estimated_carbs_100g = aiAnalysis.estimated_carbs_100g;
+        console.log(`[API SAVE UPSERT] Aggiunto estimated_carbs_100g: ${aiAnalysis.estimated_carbs_100g}`);
+      }
+      if (isVisualScan && aiAnalysis.estimated_fats_100g !== undefined) {
+        productUpsertPayload.estimated_fats_100g = aiAnalysis.estimated_fats_100g;
+        console.log(`[API SAVE UPSERT] Aggiunto estimated_fats_100g: ${aiAnalysis.estimated_fats_100g}`);
+      }
       // --- FINE NUOVE AGGIUNTE ---
     }
 
@@ -345,6 +465,9 @@ export const saveProductAndManageHistory = async (
     } else {
       console.log(`[DB SUCCESS] Cronologia aggiornata per prodotto ${upsertedProduct.id}.`);
     }
+
+    // 3. Pulisci la cronologia mantenendo solo gli ultimi 15 prodotti
+    await cleanupUserHistory(userId);
 
     return upsertedProduct; // Restituisce il record completo (con o senza AI, a seconda di cosa c'era prima nel DB)
 
@@ -415,7 +538,7 @@ export const removeProductFromFavorites = async (userId: string, productRecordId
 
 
 /**
- * Recupera la cronologia delle scansioni dell'utente (ultimi 10 prodotti).
+ * Recupera la cronologia delle scansioni dell'utente (ultimi 15 prodotti).
  * Ogni elemento include i dati completi del prodotto dalla tabella 'products'.
  */
 export const getScanHistory = async (userId: string): Promise<DisplayableHistoryProduct[]> => {
@@ -433,7 +556,7 @@ export const getScanHistory = async (userId: string): Promise<DisplayableHistory
       `)
       .eq("user_id", userId)
       .order("scanned_at", { ascending: false })
-      .limit(10);
+      .limit(15);
 
     if (error) {
       console.error("[DB ERROR] Errore nel recupero della cronologia:", error);
@@ -463,6 +586,14 @@ export const getScanHistory = async (userId: string): Promise<DisplayableHistory
     console.error(`[API ERROR] Errore in getScanHistory per utente ${userId}:`, error);
     return [];
   }
+};
+
+/**
+ * Funzione pubblica per pulire manualmente la cronologia dell'utente.
+ * Può essere chiamata dall'UI per forzare la pulizia.
+ */
+export const cleanupUserHistoryManually = async (userId: string): Promise<void> => {
+  return cleanupUserHistory(userId);
 };
 
 /**
@@ -505,6 +636,62 @@ export const getFavoriteProducts = async (userId: string): Promise<ProductRecord
   }
 };
 
+/**
+ * Ottiene i prodotti recenti dell'utente per il tracking delle calorie.
+ * Rimuove duplicati e restituisce fino a 15 prodotti unici.
+ */
+export const getRecentProducts = async (): Promise<ProductRecord[]> => {
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Utente non autenticato');
+
+    console.log(`[API FETCH] Recupero prodotti recenti per utente ${user.id}`);
+
+    const { data, error } = await supabase
+      .from('user_scan_history')
+      .select(`
+        products (
+          *
+        )
+      `)
+      .eq('user_id', user.id)
+      .order('scanned_at', { ascending: false })
+      .limit(20); // Prendiamo più record per gestire duplicati
+
+    if (error) {
+      console.error('[RECENT PRODUCTS ERROR]', error);
+      throw error;
+    }
+
+    if (!data || data.length === 0) {
+      console.log(`[RECENT PRODUCTS] Nessun prodotto recente trovato per l'utente ${user.id}`);
+      return [];
+    }
+
+    // Estrai solo i dati dei prodotti, rimuovendo duplicati
+    const products: ProductRecord[] = [];
+    const seenProductIds = new Set<string>();
+
+    for (const item of data) {
+      const product = item.products as unknown as ProductRecord;
+      if (product && product.id && !seenProductIds.has(product.id)) {
+        products.push(product);
+        seenProductIds.add(product.id);
+        
+        // Limitiamo a 15 prodotti unici
+        if (products.length >= 15) break;
+      }
+    }
+
+    console.log(`[RECENT PRODUCTS] Recuperati ${products.length} prodotti unici`);
+    return products;
+
+  } catch (error) {
+    console.error('[RECENT PRODUCTS ERROR] Errore nel recupero dei prodotti recenti:', error);
+    throw error;
+  }
+};
+
 // Funzione per generare un barcode sintetico per prodotti senza codice
 // Questa funzione potrebbe essere ancora utile
 export const generateVisualScanBarcode = (): string => {
@@ -533,7 +720,20 @@ export const fetchProductFromOpenFoodFacts = async (barcode: string): Promise<Ra
       };
     }
 
-    const response = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
+    // TIMEOUT di 10 secondi per evitare che si blocchi
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.error(`[API TIMEOUT] Timeout dopo 10s per ${barcode}, cancellazione richiesta...`);
+      controller.abort();
+    }, 10000);
+
+    console.log(`[API FETCH START] Chiamata fetch per ${barcode}...`);
+    const response = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`, {
+      signal: controller.signal
+    });
+    console.log(`[API FETCH END] Risposta ricevuta per ${barcode}, status: ${response.status}`);
+    
+    clearTimeout(timeoutId);
     const data = await response.json();
 
     console.timeEnd(`[API TIMING] Recupero dati OpenFoodFacts per ${barcode}`);
@@ -596,6 +796,12 @@ export const fetchProductFromOpenFoodFacts = async (barcode: string): Promise<Ra
     return product;
   } catch (error) {
     console.error(`[API ERROR] Errore nel recupero dei dati del prodotto ${barcode} da OpenFoodFacts:`, error);
+    
+    // Gestione specifica del timeout
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error(`[API TIMEOUT ERROR] Timeout di 10s raggiunto per ${barcode}, OpenFoodFacts non risponde`);
+    }
+    
     // In caso di errore di rete o altro, restituisci null per permettere fallback a scansione visiva se applicabile
     return null;
   }
@@ -752,6 +958,8 @@ export const handleBarcodeScan = async (
         console.warn('[DB WARN] Mancato aggiornamento scanned_at nella cronologia per prodotto esistente:', historyUpsertError);
       } else {
          console.log(`[DB INFO] Cronologia aggiornata per prodotto esistente ${existingProductRecord.id}`);
+         // Pulisci la cronologia mantenendo solo gli ultimi 15 prodotti
+         await cleanupUserHistory(userId);
       }
       
       const productDataFromDb: RawProductData = {
@@ -783,12 +991,11 @@ export const handleBarcodeScan = async (
           analysis: existingProductRecord.health_analysis ?? '',
           pros: existingProductRecord.health_pros ?? [],
           cons: existingProductRecord.health_cons ?? [],
-          recommendations: existingProductRecord.health_recommendations ?? [],
-          sustainabilityAnalysis: existingProductRecord.sustainability_analysis ?? '',
+    
           sustainabilityPros: existingProductRecord.sustainability_pros ?? [],
           sustainabilityCons: existingProductRecord.sustainability_cons ?? [],
-          sustainabilityRecommendations: existingProductRecord.sustainability_recommendations ?? [],
-          suggestedPortionGrams: existingProductRecord.suggested_portion_grams,
+          sustainabilityNeutrals: existingProductRecord.sustainability_neutrals ?? [],
+  
           nutriScoreExplanation: existingProductRecord.nutri_score_explanation ?? undefined,
           novaExplanation: existingProductRecord.nova_explanation ?? undefined,
           ecoScoreExplanation: existingProductRecord.eco_score_explanation ?? undefined
@@ -877,12 +1084,10 @@ export const fetchOrGenerateAiAnalysisAndUpdateProduct = async (
         health_analysis, 
         health_pros, 
         health_cons, 
-        health_recommendations, 
-        sustainability_analysis, 
+ 
         sustainability_pros, 
         sustainability_cons, 
-        sustainability_recommendations,
-        suggested_portion_grams,
+        sustainability_neutrals,
         nutri_score_explanation, 
         nova_explanation, 
         eco_score_explanation 
@@ -896,12 +1101,11 @@ export const fetchOrGenerateAiAnalysisAndUpdateProduct = async (
         | "health_analysis"
         | "health_pros"
         | "health_cons"
-        | "health_recommendations"
-        | "sustainability_analysis"
+
         | "sustainability_pros"
         | "sustainability_cons"
-        | "sustainability_recommendations"
-        | "suggested_portion_grams"
+        | "sustainability_neutrals"
+  
         | "nutri_score_explanation" // AGGIUNTO: Tipo spiegazione score
         | "nova_explanation"        // AGGIUNTO: Tipo spiegazione score
         | "eco_score_explanation"   // AGGIUNTO: Tipo spiegazione score
@@ -922,12 +1126,11 @@ export const fetchOrGenerateAiAnalysisAndUpdateProduct = async (
         analysis: existingProduct.health_analysis ?? "",
         pros: existingProduct.health_pros ?? [],
         cons: existingProduct.health_cons ?? [],
-        recommendations: existingProduct.health_recommendations ?? [],
-        sustainabilityAnalysis: existingProduct.sustainability_analysis ?? "",
+
         sustainabilityPros: existingProduct.sustainability_pros ?? [],
         sustainabilityCons: existingProduct.sustainability_cons ?? [],
-        sustainabilityRecommendations: existingProduct.sustainability_recommendations ?? [],
-        suggestedPortionGrams: existingProduct.suggested_portion_grams,
+        sustainabilityNeutrals: existingProduct.sustainability_neutrals ?? [],
+
         nutriScoreExplanation: existingProduct.nutri_score_explanation ?? undefined,
         novaExplanation: existingProduct.nova_explanation ?? undefined,
         ecoScoreExplanation: existingProduct.eco_score_explanation ?? undefined
@@ -936,7 +1139,16 @@ export const fetchOrGenerateAiAnalysisAndUpdateProduct = async (
 
     // 3. Se l'analisi non esiste o è incompleta, genera una nuova analisi
     console.log(`[API AI FETCH/GEN] Analisi AI non trovata o incompleta per ${productRecordId}. Avvio generazione con Gemini.`);
-    const aiAnalysis = await analyzeProductWithGemini(rawProductDataSource);
+    
+    // Prova prima l'analisi personalizzata, poi fallback a quella standard
+    let aiAnalysis: GeminiAnalysisResult | null = null;
+    try {
+      console.log(`[API AI FETCH/GEN] Tentativo analisi personalizzata per utente ${userId}`);
+      aiAnalysis = await analyzeProductWithUserPreferences(rawProductDataSource, userId);
+    } catch (personalizedError) {
+      console.warn(`[API AI FETCH/GEN] Analisi personalizzata fallita per ${userId}, fallback a analisi standard:`, personalizedError);
+      aiAnalysis = await analyzeProductWithGemini(rawProductDataSource);
+    }
 
     if (!aiAnalysis) {
       console.error(`[API AI FETCH/GEN] Generazione analisi AI fallita per ${productRecordId}.`);
@@ -945,25 +1157,43 @@ export const fetchOrGenerateAiAnalysisAndUpdateProduct = async (
 
     console.log(`[API AI FETCH/GEN] Analisi AI generata per ${productRecordId}. Aggiornamento DB.`);
 
-    // 4. Aggiorna il record del prodotto nel DB con la nuova analisi
-    const { data: updatedProduct, error: updateError } = await supabase
+    // 4. Prima recupera il prodotto per verificare se è da analisi visiva
+    const { data: productInfo, error: fetchError } = await supabase
       .from("products")
-      .update({
+      .select('is_visually_analyzed')
+      .eq("id", productRecordId)
+      .single();
+
+    if (fetchError) {
+      console.error(`[API AI FETCH/GEN] Errore nel recuperare il prodotto ${productRecordId}:`, fetchError);
+      return aiAnalysis; // Restituisce comunque l'analisi generata
+    }
+
+    const isVisualScan = productInfo?.is_visually_analyzed || false;
+
+    // Prepara i dati di aggiornamento
+    const updateData: any = {
         health_score: aiAnalysis.healthScore,
         sustainability_score: aiAnalysis.sustainabilityScore,
         health_analysis: aiAnalysis.analysis,
         health_pros: aiAnalysis.pros,
         health_cons: aiAnalysis.cons,
-        health_recommendations: aiAnalysis.recommendations,
-        sustainability_analysis: aiAnalysis.sustainabilityAnalysis,
         sustainability_pros: aiAnalysis.sustainabilityPros,
         sustainability_cons: aiAnalysis.sustainabilityCons,
-        sustainability_recommendations: aiAnalysis.sustainabilityRecommendations,
-        suggested_portion_grams: aiAnalysis.suggestedPortionGrams,
-        nutri_score_explanation: aiAnalysis.nutriScoreExplanation,
-        nova_explanation: aiAnalysis.novaExplanation,
-        eco_score_explanation: aiAnalysis.ecoScoreExplanation
-      })
+      sustainability_neutrals: aiAnalysis.sustainabilityNeutrals
+    };
+
+    // Aggiungi spiegazioni score solo per prodotti con barcode (non per analisi foto)
+    if (!isVisualScan) {
+      updateData.nutri_score_explanation = aiAnalysis.nutriScoreExplanation;
+      updateData.nova_explanation = aiAnalysis.novaExplanation;
+      updateData.eco_score_explanation = aiAnalysis.ecoScoreExplanation;
+    }
+
+    // 5. Aggiorna il record del prodotto nel DB con la nuova analisi
+    const { data: updatedProduct, error: updateError } = await supabase
+      .from("products")
+      .update(updateData)
       .eq("id", productRecordId)
       .select('id')
       .single();
@@ -1045,7 +1275,7 @@ export const savePhotoAnalysisIngredients = async (
       const baseIngredient = {
       product_record_id: productRecordId,
       user_id: userId,
-      original_ai_ingredient_id: ingredient.id.startsWith('user_') ? null : ingredient.id,
+      original_ai_ingredient_id: String(ingredient.id).startsWith('user_') ? null : String(ingredient.id),
       ingredient_name: ingredient.name,
       user_defined_weight_g: ingredient.estimated_weight_g,
       user_defined_calories_kcal: ingredient.estimated_calories_kcal,
@@ -1273,25 +1503,25 @@ export const saveProductToDatabase = async (
         health_score: aiAnalysis.healthScore,
         health_analysis: aiAnalysis.analysis,
         sustainability_score: aiAnalysis.sustainabilityScore || null,
-        sustainability_analysis: aiAnalysis.sustainabilityAnalysis || "",
+        
         
         // Converti array in stringhe JSON per il DB
-        health_pros: Array.isArray(aiAnalysis.pros) ? aiAnalysis.pros.map(p => JSON.stringify(p)) : [],
-        health_cons: Array.isArray(aiAnalysis.cons) ? aiAnalysis.cons.map(c => JSON.stringify(c)) : [],
-        health_recommendations: aiAnalysis.recommendations || [],
+        health_pros: Array.isArray(aiAnalysis.pros) ? aiAnalysis.pros.map((p: {title: string, detail: string}) => JSON.stringify(p)) : [],
+        health_cons: Array.isArray(aiAnalysis.cons) ? aiAnalysis.cons.map((c: {title: string, detail: string}) => JSON.stringify(c)) : [],
         
         // Sostenibilità (opzionale, potrebbe non essere presente per alcuni tipi di analisi)
-        sustainability_pros: Array.isArray(aiAnalysis.sustainabilityPros) ? aiAnalysis.sustainabilityPros.map(p => JSON.stringify(p)) : [],
-        sustainability_cons: Array.isArray(aiAnalysis.sustainabilityCons) ? aiAnalysis.sustainabilityCons.map(c => JSON.stringify(c)) : [],
-        sustainability_recommendations: aiAnalysis.sustainabilityRecommendations || [],
+        sustainability_pros: Array.isArray(aiAnalysis.sustainabilityPros) ? aiAnalysis.sustainabilityPros.map((p: {title: string, detail: string}) => JSON.stringify(p)) : [],
+        sustainability_cons: Array.isArray(aiAnalysis.sustainabilityCons) ? aiAnalysis.sustainabilityCons.map((c: {title: string, detail: string}) => JSON.stringify(c)) : [],
         
-        // Spiegazioni score
+        // Spiegazioni score (solo per prodotti con barcode, non per analisi foto)
+        ...(isProductFromVisualScan(product.code) ? {} : {
         nutri_score_explanation: aiAnalysis.nutriScoreExplanation || null,
         nova_explanation: aiAnalysis.novaExplanation || null,
         eco_score_explanation: aiAnalysis.ecoScoreExplanation || null,
+        }),
         
         // Metri specifici
-        suggested_portion_grams: aiAnalysis.suggestedPortionGrams || null,
+
         
         // Valori determinati dalla visione
         product_name_from_vision: aiAnalysis.productNameFromVision || null,
@@ -1338,6 +1568,9 @@ export const saveProductToDatabase = async (
       console.log(`[DB SUCCESS] Cronologia aggiornata per prodotto ${productData.id}.`);
     }
 
+    // Pulisci la cronologia mantenendo solo gli ultimi 15 prodotti
+    await cleanupUserHistory(userId);
+
     return productData.id;
   } catch (error) {
     console.error("[DB ERROR] Eccezione nella funzione saveProductToDatabase:", error);
@@ -1359,9 +1592,9 @@ export const updateProductIngredientsInDb = async (
 ): Promise<boolean> => {
   if (!productId || !ingredients || ingredients.length === 0) {
     console.error('[updateProductIngredientsInDb] Dati mancanti per aggiornamento:', { productId, ingredients });
-    return false;
-  }
-  
+      return false;
+    }
+
   try {
     // Calcola i totali dei valori nutrizionali
     const totalProteins = ingredients.reduce((acc, ing) => acc + ((ing.estimated_proteins_g || 0) * (ing.quantity || 1)), 0);
