@@ -6,11 +6,14 @@ import {
   Alert,
   StyleSheet,
   TouchableOpacity,
-  TextInput,
   Platform,
+  Modal,
+  Dimensions,
 } from 'react-native';
+import { scaleFont } from '../../theme/typography';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { Picker } from '@react-native-picker/picker';
 import { createOrUpdateNutritionProfile, NutritionProfileInput, calculateBMR, calculateTDEE, calculateTargetCalories, calculateMacroTargets } from '../../services/nutritionApi';
 
 // Costanti di stile per uniformare con l'app
@@ -20,6 +23,7 @@ const BORDER_COLOR = '#000000';
 const SHADOW_OFFSET_VALUE = 3.5;
 const CARD_BORDER_WIDTH = 1.5;
 const CARD_BORDER_RADIUS = 16;
+const PRIMARY_GREEN = '#00463b'; // Verde scuro della navbar
 
 interface Props {
   navigation: any;
@@ -30,31 +34,31 @@ const ACTIVITY_LEVELS = [
   {
     key: 'sedentary',
     label: 'Sedentario',
-    description: 'Poco o nessun esercizio',
+    description: 'Nessun esercizio fisico',
     icon: 'bed-outline',
   },
   {
     key: 'lightly_active',
     label: 'Leggermente Attivo',
-    description: 'Esercizio leggero 1-3 giorni/settimana',
+    description: 'Sport 1-3 volte a settimana',
     icon: 'walk-outline',
   },
   {
     key: 'moderately_active',
     label: 'Moderatamente Attivo',
-    description: 'Esercizio moderato 3-5 giorni/settimana',
+    description: 'Sport 3-5 volte a settimana',
     icon: 'bicycle-outline',
   },
   {
     key: 'very_active',
     label: 'Molto Attivo',
-    description: 'Esercizio intenso 6-7 giorni/settimana',
+    description: 'Sport 6-7 volte a settimana',
     icon: 'fitness-outline',
   },
   {
     key: 'extra_active',
     label: 'Estremamente Attivo',
-    description: 'Esercizio molto intenso, lavoro fisico',
+    description: 'Sport intenso + lavoro fisico',
     icon: 'barbell-outline',
   },
 ];
@@ -63,30 +67,20 @@ const GOALS = [
   {
     key: 'lose_weight',
     label: 'Perdere Peso',
-    description: 'Deficit calorico per dimagrimento',
+    description: 'Ridurre il peso corporeo',
     icon: 'trending-down-outline',
-    color: '#FF6B6B',
   },
   {
     key: 'maintain',
     label: 'Mantenere Peso',
     description: 'Mantenere il peso attuale',
     icon: 'remove-outline',
-    color: '#4ECDC4',
   },
   {
     key: 'gain_weight',
     label: 'Aumentare Peso',
-    description: 'Surplus calorico per aumento peso',
+    description: 'Aumentare il peso corporeo',
     icon: 'trending-up-outline',
-    color: '#45B7D1',
-  },
-  {
-    key: 'gain_muscle',
-    label: 'Costruire Muscoli',
-    description: 'Aumento massa muscolare',
-    icon: 'fitness',
-    color: '#96CEB4',
   },
 ];
 
@@ -101,6 +95,9 @@ export default function NutritionProfileSetupScreen({ navigation, onProfileCreat
   });
   const [loading, setLoading] = useState(false);
   const [step, setStep] = useState(1);
+  const [showWeightPicker, setShowWeightPicker] = useState(false);
+  const [showHeightPicker, setShowHeightPicker] = useState(false);
+  const [showAgePicker, setShowAgePicker] = useState(false);
 
   const handleSubmit = async () => {
     try {
@@ -152,207 +149,248 @@ export default function NutritionProfileSetupScreen({ navigation, onProfileCreat
   };
 
   const renderStep1 = () => (
-    <View style={styles.stepCardWrapper}>
-      <View style={styles.stepCardShadow} />
-      <View style={styles.stepCardContainer}>
-        <Text style={styles.stepTitle}>Dati Personali</Text>
-        
-        {/* Peso */}
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Peso (kg)</Text>
-          <View style={styles.inputWrapper}>
-            <View style={styles.inputShadow} />
-            <View style={styles.inputWithUnit}>
-              <TextInput
-                style={styles.numericInput}
-                value={formData.weight_kg.toString()}
-                onChangeText={(text) => setFormData(prev => ({
-                  ...prev,
-                  weight_kg: parseFloat(text) || 0
-                }))}
-                keyboardType="numeric"
-                placeholder="70"
-              />
-              <Text style={styles.inputUnit}>kg</Text>
+    <View style={styles.stepContainer}>
+      
+      {/* Peso */}
+      <View style={styles.dataFieldWrapper}>
+        <View style={[styles.dataFieldShadow, { backgroundColor: '#FF6B35' }]} />
+        <TouchableOpacity 
+          style={[styles.dataFieldContainer, { borderColor: '#FF6B35' }]}
+          onPress={() => setShowWeightPicker(true)}
+          activeOpacity={1}
+        >
+          <View style={styles.dataFieldLeft}>
+            <View style={[styles.dataFieldIcon, { backgroundColor: '#FF6B35' }]}>
+              <Ionicons name="barbell" size={16} color="#FFFFFF" />
+            </View>
+            <View style={styles.dataFieldInfo}>
+              <Text style={styles.dataFieldLabel} allowFontScaling={false}>Peso corporeo</Text>
             </View>
           </View>
-        </View>
-
-        {/* Altezza */}
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Altezza (cm)</Text>
-          <View style={styles.inputWrapper}>
-            <View style={styles.inputShadow} />
-            <View style={styles.inputWithUnit}>
-              <TextInput
-                style={styles.numericInput}
-                value={formData.height_cm.toString()}
-                onChangeText={(text) => setFormData(prev => ({
-                  ...prev,
-                  height_cm: parseInt(text) || 0
-                }))}
-                keyboardType="numeric"
-                placeholder="170"
-              />
-              <Text style={styles.inputUnit}>cm</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Età */}
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Età</Text>
-          <View style={styles.inputWrapper}>
-            <View style={styles.inputShadow} />
-            <View style={styles.inputWithUnit}>
-              <TextInput
-                style={styles.numericInput}
-                value={formData.age.toString()}
-                onChangeText={(text) => setFormData(prev => ({
-                  ...prev,
-                  age: parseInt(text) || 0
-                }))}
-                keyboardType="numeric"
-                placeholder="30"
-              />
-              <Text style={styles.inputUnit}>anni</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Genere */}
-        <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Genere</Text>
-          <View style={styles.genderSelector}>
-            {[
-              { key: 'male', label: 'Maschio', icon: 'male' },
-              { key: 'female', label: 'Femmina', icon: 'female' },
-              { key: 'other', label: 'Altro', icon: 'person' }
-            ].map((gender) => (
-              <View key={gender.key} style={styles.genderOptionWrapper}>
-                <View style={styles.genderOptionShadow} />
-                <TouchableOpacity
-                  style={[
-                    styles.genderOption,
-                    formData.gender === gender.key && styles.genderOptionSelected
-                  ]}
-                  onPress={() => setFormData(prev => ({ ...prev, gender: gender.key as any }))}
-                >
-                  <Ionicons
-                    name={gender.icon as any}
-                    size={24}
-                    color={formData.gender === gender.key ? '#FFFFFF' : BORDER_COLOR}
-                  />
-                  <Text style={[
-                    styles.genderOptionText,
-                    formData.gender === gender.key && styles.genderOptionTextSelected
-                  ]}>
-                    {gender.label}
-                  </Text>
-                </TouchableOpacity>
+          <View style={styles.dataFieldRight}>
+            <View style={styles.valueContainer}>
+              <View style={[styles.valueBadge, { backgroundColor: '#FF6B3515' }]}>
+                <Text style={[styles.valueNumber, { color: '#FF6B35' }]} allowFontScaling={false}>{formData.weight_kg}</Text>
               </View>
-            ))}
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#999999" />
           </View>
-        </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* Altezza */}
+      <View style={styles.dataFieldWrapper}>
+        <View style={[styles.dataFieldShadow, { backgroundColor: '#4ECDC4' }]} />
+        <TouchableOpacity 
+          style={[styles.dataFieldContainer, { borderColor: '#4ECDC4' }]}
+          onPress={() => setShowHeightPicker(true)}
+          activeOpacity={1}
+        >
+          <View style={styles.dataFieldLeft}>
+            <View style={[styles.dataFieldIcon, { backgroundColor: '#4ECDC4' }]}>
+              <Ionicons name="trending-up" size={16} color="#FFFFFF" />
+            </View>
+            <View style={styles.dataFieldInfo}>
+              <Text style={styles.dataFieldLabel} allowFontScaling={false}>Altezza</Text>
+            </View>
+          </View>
+          <View style={styles.dataFieldRight}>
+            <View style={styles.valueContainer}>
+              <View style={[styles.valueBadge, { backgroundColor: '#4ECDC415' }]}>
+                <Text style={[styles.valueNumber, { color: '#4ECDC4' }]} allowFontScaling={false}>{formData.height_cm}</Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#999999" />
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* Età */}
+      <View style={styles.dataFieldWrapper}>
+        <View style={[styles.dataFieldShadow, { backgroundColor: '#9B59B6' }]} />
+        <TouchableOpacity 
+          style={[styles.dataFieldContainer, { borderColor: '#9B59B6' }]}
+          onPress={() => setShowAgePicker(true)}
+          activeOpacity={1}
+        >
+          <View style={styles.dataFieldLeft}>
+            <View style={[styles.dataFieldIcon, { backgroundColor: '#9B59B6' }]}>
+              <Ionicons name="time" size={16} color="#FFFFFF" />
+            </View>
+            <View style={styles.dataFieldInfo}>
+              <Text style={styles.dataFieldLabel} allowFontScaling={false}>Età</Text>
+            </View>
+          </View>
+          <View style={styles.dataFieldRight}>
+            <View style={styles.valueContainer}>
+              <View style={[styles.valueBadge, { backgroundColor: '#9B59B615' }]}>
+                <Text style={[styles.valueNumber, { color: '#9B59B6' }]} allowFontScaling={false}>{formData.age}</Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#999999" />
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* Genere */}
+      <View style={styles.dataFieldWrapper}>
+        <View style={[styles.dataFieldShadow, { backgroundColor: '#E91E63' }]} />
+        <TouchableOpacity 
+          style={[styles.dataFieldContainer, { borderColor: '#E91E63' }]}
+          activeOpacity={1}
+        >
+          <View style={styles.dataFieldLeft}>
+            <View style={[styles.dataFieldIcon, { backgroundColor: '#E91E63' }]}>
+              <Ionicons name="people" size={16} color="#FFFFFF" />
+            </View>
+            <View style={styles.dataFieldInfo}>
+              <Text style={styles.dataFieldLabel} allowFontScaling={false}>Genere</Text>
+            </View>
+          </View>
+          <View style={styles.dataFieldRight}>
+            <View style={styles.genderOptionsRow}>
+              {[
+                { key: 'male', label: 'Maschio', icon: 'male' },
+                { key: 'female', label: 'Femmina', icon: 'female' },
+                { key: 'other', label: 'Altro', icon: 'person' }
+              ].map((gender) => {
+                const isSelected = formData.gender === gender.key;
+                return (
+                  <TouchableOpacity
+                    key={gender.key}
+                    style={[
+                      styles.genderOptionButton,
+                      isSelected && styles.genderOptionButtonSelected
+                    ]}
+                    onPress={() => setFormData(prev => ({ ...prev, gender: gender.key as any }))}
+                    activeOpacity={1}
+                  >
+                    <Ionicons
+                      name={gender.icon as any}
+                      size={14}
+                      color={isSelected ? '#FFFFFF' : '#666666'}
+                    />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </TouchableOpacity>
       </View>
     </View>
   );
 
   const renderStep2 = () => (
-    <View style={styles.stepCardWrapper}>
-      <View style={styles.stepCardShadow} />
-      <View style={styles.stepCardContainer}>
-        <Text style={styles.stepTitle}>Livello di Attività</Text>
-        <Text style={styles.stepDescription}>
-          Seleziona il tuo livello di attività fisica medio
-        </Text>
+    <View style={styles.stepContainer}>
+      
+      {ACTIVITY_LEVELS.map((level, index) => {
+        const isSelected = formData.activity_level === level.key;
+        const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FECA57'];
+        const color = colors[index % colors.length];
         
-        {ACTIVITY_LEVELS.map((level) => (
-          <View key={level.key} style={styles.activityOptionWrapper}>
-            <View style={styles.activityOptionShadow} />
+        return (
+          <View key={level.key} style={styles.dataFieldWrapper}>
+            <View style={[styles.dataFieldShadow, { backgroundColor: isSelected ? '#000000' : color }]} />
             <TouchableOpacity
               style={[
-                styles.activityOption,
-                formData.activity_level === level.key && styles.activityOptionSelected
+                styles.dataFieldContainer,
+                { 
+                  borderColor: isSelected ? '#000000' : color,
+                  backgroundColor: isSelected ? color : CARD_BACKGROUND_COLOR
+                }
               ]}
               onPress={() => setFormData(prev => ({ ...prev, activity_level: level.key as any }))}
+              activeOpacity={1}
             >
-              <View style={styles.activityOptionIcon}>
-                <Ionicons
-                  name={level.icon as any}
-                  size={28}
-                  color={formData.activity_level === level.key ? '#4ECDC4' : '#666666'}
-                />
+              <View style={styles.dataFieldLeft}>
+                <View style={[styles.dataFieldIcon, { backgroundColor: isSelected ? '#000000' : color }]}>
+                  <Ionicons
+                    name={level.icon as any}
+                    size={16}
+                    color="#FFFFFF"
+                  />
+                </View>
+                <View style={styles.dataFieldInfo}>
+                  <Text style={[
+                    styles.dataFieldLabel,
+                    isSelected && { color: '#FFFFFF' }
+                  ]} allowFontScaling={false}>
+                    {level.label}
+                  </Text>
+                  <Text style={[
+                    styles.dataFieldDescription,
+                    isSelected && { color: '#FFFFFF' }
+                  ]} allowFontScaling={false}>
+                    {level.description}
+                  </Text>
+                </View>
               </View>
-              <View style={styles.activityOptionContent}>
-                <Text style={[
-                  styles.activityOptionTitle,
-                  formData.activity_level === level.key && styles.activityOptionTitleSelected
-                ]}>
-                  {level.label}
-                </Text>
-                <Text style={styles.activityOptionDescription}>
-                  {level.description}
-                </Text>
-              </View>
-              <View style={styles.activityOptionCheck}>
-                {formData.activity_level === level.key && (
-                  <Ionicons name="checkmark-circle" size={24} color="#4ECDC4" />
+              <View style={styles.dataFieldRight}>
+                {isSelected && (
+                  <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
                 )}
               </View>
             </TouchableOpacity>
           </View>
-        ))}
-      </View>
+        );
+      })}
     </View>
   );
 
   const renderStep3 = () => (
-    <View style={styles.stepCardWrapper}>
-      <View style={styles.stepCardShadow} />
-      <View style={styles.stepCardContainer}>
-        <Text style={styles.stepTitle}>Obiettivo</Text>
-        <Text style={styles.stepDescription}>
-          Qual è il tuo obiettivo nutrizionale?
-        </Text>
+    <View style={styles.stepContainer}>
+      
+      {GOALS.map((goal, index) => {
+        const isSelected = formData.goal === goal.key;
+        const colors = ['#E74C3C', '#2ECC71', '#3498DB'];
+        const color = colors[index % colors.length];
         
-        {GOALS.map((goal) => (
-          <View key={goal.key} style={styles.goalOptionWrapper}>
-            <View style={styles.goalOptionShadow} />
+        return (
+          <View key={goal.key} style={styles.dataFieldWrapper}>
+            <View style={[styles.dataFieldShadow, { backgroundColor: isSelected ? '#000000' : color }]} />
             <TouchableOpacity
               style={[
-                styles.goalOption,
-                formData.goal === goal.key && styles.goalOptionSelected
+                styles.dataFieldContainer,
+                { 
+                  borderColor: isSelected ? '#000000' : color,
+                  backgroundColor: isSelected ? color : CARD_BACKGROUND_COLOR
+                }
               ]}
               onPress={() => setFormData(prev => ({ ...prev, goal: goal.key as any }))}
+              activeOpacity={1}
             >
-              <View style={[styles.goalOptionIcon, { backgroundColor: goal.color }]}>
-                <Ionicons
-                  name={goal.icon as any}
-                  size={28}
-                  color="#FFFFFF"
-                />
+              <View style={styles.dataFieldLeft}>
+                <View style={[styles.dataFieldIcon, { backgroundColor: isSelected ? '#000000' : color }]}>
+                  <Ionicons
+                    name={goal.icon as any}
+                    size={16}
+                    color="#FFFFFF"
+                  />
+                </View>
+                <View style={styles.dataFieldInfo}>
+                  <Text style={[
+                    styles.dataFieldLabel,
+                    isSelected && { color: '#FFFFFF' }
+                  ]} allowFontScaling={false}>
+                    {goal.label}
+                  </Text>
+                  <Text style={[
+                    styles.dataFieldDescription,
+                    isSelected && { color: '#FFFFFF' }
+                  ]} allowFontScaling={false}>
+                    {goal.description}
+                  </Text>
+                </View>
               </View>
-              <View style={styles.goalOptionContent}>
-                <Text style={[
-                  styles.goalOptionTitle,
-                  formData.goal === goal.key && styles.goalOptionTitleSelected
-                ]}>
-                  {goal.label}
-                </Text>
-                <Text style={styles.goalOptionDescription}>
-                  {goal.description}
-                </Text>
-              </View>
-              <View style={styles.goalOptionCheck}>
-                {formData.goal === goal.key && (
-                  <Ionicons name="checkmark-circle" size={24} color={goal.color} />
+              <View style={styles.dataFieldRight}>
+                {isSelected && (
+                  <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" />
                 )}
               </View>
             </TouchableOpacity>
           </View>
-        ))}
-      </View>
+        );
+      })}
     </View>
   );
 
@@ -360,53 +398,57 @@ export default function NutritionProfileSetupScreen({ navigation, onProfileCreat
     const estimates = getEstimates();
     
     return (
-      <View style={styles.stepCardWrapper}>
-        <View style={styles.stepCardShadow} />
-        <View style={styles.stepCardContainer}>
-          <Text style={styles.stepTitle}>Riepilogo</Text>
-          <Text style={styles.stepDescription}>
-            Ecco il tuo profilo nutrizionale calcolato
-          </Text>
+      <View style={styles.stepContainer}>
+        <View style={styles.summaryWrapper}>
+          <View style={styles.summaryShadow} />
+          <View style={styles.summaryContainer}>
+            <View style={styles.summaryHeader}>
+              <Text style={styles.summaryMainValue} allowFontScaling={false}>
+                {estimates.targetKcal}
+              </Text>
+              <Text style={styles.summaryMainLabel} allowFontScaling={false}>
+                kcal giornaliere
+              </Text>
+              <Text style={styles.summaryBmi} allowFontScaling={false}>
+                BMI: {estimates.bmi.toFixed(1)}
+              </Text>
+            </View>
 
-          <View style={styles.summaryCardWrapper}>
-            <View style={styles.summaryCardShadow} />
-            <View style={styles.summaryCard}>
-              <View style={styles.summaryHeader}>
-                <Ionicons name="person-circle" size={48} color="#4ECDC4" />
-                <View style={styles.summaryHeaderText}>
-                  <Text style={styles.summaryName}>Il Tuo Profilo</Text>
-                  <Text style={styles.summaryBmi}>BMI: {estimates.bmi.toFixed(1)}</Text>
+            <View style={styles.macroGrid}>
+              <View style={styles.macroItem}>
+                <View style={[styles.macroIcon, { backgroundColor: '#CD5C5C' }]}>
+                  <Ionicons name="barbell" size={16} color="#000000" />
                 </View>
-              </View>
-
-              <View style={styles.summaryStats}>
-                <View style={styles.statItem}>
-                  <Text style={styles.statValue}>{estimates.targetKcal}</Text>
-                  <Text style={styles.statLabel}>Calorie Target</Text>
-                </View>
-                <View style={styles.statItem}>
-                  <Text style={styles.statValue}>{estimates.macros.proteins_g}g</Text>
-                  <Text style={styles.statLabel}>Proteine</Text>
-                </View>
-                <View style={styles.statItem}>
-                  <Text style={styles.statValue}>{estimates.macros.carbs_g}g</Text>
-                  <Text style={styles.statLabel}>Carboidrati</Text>
-                </View>
-                <View style={styles.statItem}>
-                  <Text style={styles.statValue}>{estimates.macros.fats_g}g</Text>
-                  <Text style={styles.statLabel}>Grassi</Text>
-                </View>
-              </View>
-
-              <View style={styles.summaryDetails}>
-                <Text style={styles.summaryDetailText}>
-                  Metabolismo basale: {estimates.bmr} kcal/giorno
+                <Text style={styles.macroLabel} allowFontScaling={false}>Proteine</Text>
+                <Text style={styles.macroValue} allowFontScaling={false}>
+                  {estimates.macros.proteins_g}g
                 </Text>
-                <Text style={styles.summaryDetailText}>
-                  Dispendio totale: {estimates.tdee} kcal/giorno
+              </View>
+
+              <View style={styles.macroItem}>
+                <View style={[styles.macroIcon, { backgroundColor: '#FFD700' }]}>
+                  <Ionicons name="layers" size={16} color="#000000" />
+                </View>
+                <Text style={styles.macroLabel} allowFontScaling={false}>Carboidrati</Text>
+                <Text style={styles.macroValue} allowFontScaling={false}>
+                  {estimates.macros.carbs_g}g
+                </Text>
+              </View>
+
+              <View style={styles.macroItem}>
+                <View style={[styles.macroIcon, { backgroundColor: '#87CEEB' }]}>
+                  <Ionicons name="cafe" size={16} color="#000000" />
+                </View>
+                <Text style={styles.macroLabel} allowFontScaling={false}>Grassi</Text>
+                <Text style={styles.macroValue} allowFontScaling={false}>
+                  {estimates.macros.fats_g}g
                 </Text>
               </View>
             </View>
+
+            <Text style={styles.summaryNote} allowFontScaling={false}>
+              Dispendio energetico totale: {estimates.tdee} kcal/giorno
+            </Text>
           </View>
         </View>
       </View>
@@ -415,64 +457,182 @@ export default function NutritionProfileSetupScreen({ navigation, onProfileCreat
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.header}>
-          <TouchableOpacity 
-            style={styles.backButton}
-            onPress={() => step > 1 ? setStep(step - 1) : navigation.goBack()}
-          >
-            <Ionicons name="arrow-back" size={24} color={BORDER_COLOR} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Profilo Nutrizionale</Text>
-          <View style={styles.stepIndicatorWrapper}>
-            <View style={styles.stepIndicatorShadow} />
-            <View style={styles.stepIndicator}>
-              <Text style={styles.stepIndicatorText}>{step}/4</Text>
-            </View>
-          </View>
-        </View>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity 
+          style={styles.backButton}
+          onPress={() => step > 1 ? setStep(step - 1) : navigation.goBack()}
+        >
+          <Ionicons name="arrow-back" size={24} color={BORDER_COLOR} />
+        </TouchableOpacity>
+        <View style={styles.headerSpacer} />
+      </View>
 
-        <View style={styles.progressBarWrapper}>
-          <View style={styles.progressBarShadow} />
-          <View style={styles.progressBarContainer}>
-            <View style={[styles.progressFill, { width: `${(step / 4) * 100}%` }]} />
-          </View>
-        </View>
+      {/* Section Title */}
+      <View style={styles.sectionTitleContainer}>
+        <Text style={styles.sectionTitle} allowFontScaling={false}>
+          {step === 1 && 'Dati Personali'}
+          {step === 2 && 'Livello di Attività'}
+          {step === 3 && 'Obiettivo'}
+          {step === 4 && 'Riepilogo'}
+        </Text>
+      </View>
 
+      {/* Progress Bar Semplice */}
+      <View style={styles.progressContainer}>
+        <View style={styles.progressBar}>
+          <View style={[styles.progressFill, { width: `${(step / 4) * 100}%` }]} />
+        </View>
+        <Text style={styles.progressText} allowFontScaling={false}>
+          Passo {step} di 4
+        </Text>
+      </View>
+
+      {/* Scrollable Content */}
+      <ScrollView 
+        style={styles.scrollView} 
+        contentContainerStyle={styles.scrollContent} 
+        showsVerticalScrollIndicator={false}
+        bounces={false}
+        scrollEnabled={true}
+      >
         {step === 1 && renderStep1()}
         {step === 2 && renderStep2()}
         {step === 3 && renderStep3()}
         {step === 4 && renderStep4()}
-
-        <View style={styles.buttonContainer}>
-          {step < 4 ? (
-            <View style={styles.nextButtonWrapper}>
-              <View style={styles.nextButtonShadow} />
-              <TouchableOpacity
-                style={styles.nextButton}
-                onPress={() => setStep(step + 1)}
-              >
-                <Text style={styles.nextButtonText}>Continua</Text>
-                <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <View style={styles.nextButtonWrapper}>
-              <View style={styles.nextButtonShadow} />
-              <TouchableOpacity
-                style={[styles.nextButton, loading && styles.nextButtonDisabled]}
-                onPress={handleSubmit}
-                disabled={loading}
-              >
-                <Text style={styles.nextButtonText}>
-                  {loading ? 'Salvataggio...' : 'Salva Profilo'}
-                </Text>
-                {!loading && <Ionicons name="checkmark" size={20} color="#FFFFFF" />}
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
       </ScrollView>
+
+      {/* Fixed Bottom Button */}
+      <View style={styles.bottomButtonContainer}>
+        <TouchableOpacity
+          style={[styles.continueButton, loading && styles.buttonDisabled]}
+          onPress={step < 4 ? () => setStep(step + 1) : handleSubmit}
+          disabled={loading}
+          activeOpacity={1}
+        >
+          <Text style={styles.continueButtonText} allowFontScaling={false}>
+            {step < 4 ? 'Continua' : loading ? 'Salvataggio...' : 'Salva Profilo'}
+          </Text>
+          {!loading && (
+            <Ionicons 
+              name={step < 4 ? "arrow-forward" : "checkmark"} 
+              size={20} 
+              color="#FFFFFF" 
+            />
+          )}
+        </TouchableOpacity>
+      </View>
+
+      {/* Modal Peso */}
+      <Modal
+        visible={showWeightPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowWeightPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setShowWeightPicker(false)}>
+                <Text style={styles.modalCancelText} allowFontScaling={false}>Annulla</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalTitle} allowFontScaling={false}>Seleziona Peso</Text>
+              <TouchableOpacity onPress={() => setShowWeightPicker(false)}>
+                <Text style={styles.modalDoneText} allowFontScaling={false}>Fatto</Text>
+              </TouchableOpacity>
+            </View>
+            <Picker
+              selectedValue={formData.weight_kg}
+              onValueChange={(value) => setFormData(prev => ({ ...prev, weight_kg: value }))}
+              style={styles.picker}
+              itemStyle={styles.pickerItem}
+            >
+              {Array.from({ length: 151 }, (_, i) => i + 30).map(weight => (
+                <Picker.Item 
+                  key={weight} 
+                  label={`${weight} kg`} 
+                  value={weight}
+                  color={BORDER_COLOR}
+                />
+              ))}
+            </Picker>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal Altezza */}
+      <Modal
+        visible={showHeightPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowHeightPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setShowHeightPicker(false)}>
+                <Text style={styles.modalCancelText} allowFontScaling={false}>Annulla</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalTitle} allowFontScaling={false}>Seleziona Altezza</Text>
+              <TouchableOpacity onPress={() => setShowHeightPicker(false)}>
+                <Text style={styles.modalDoneText} allowFontScaling={false}>Fatto</Text>
+              </TouchableOpacity>
+            </View>
+            <Picker
+              selectedValue={formData.height_cm}
+              onValueChange={(value) => setFormData(prev => ({ ...prev, height_cm: value }))}
+              style={styles.picker}
+              itemStyle={styles.pickerItem}
+            >
+              {Array.from({ length: 131 }, (_, i) => i + 120).map(height => (
+                <Picker.Item 
+                  key={height} 
+                  label={`${height} cm`} 
+                  value={height}
+                  color={BORDER_COLOR}
+                />
+              ))}
+            </Picker>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal Età */}
+      <Modal
+        visible={showAgePicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowAgePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setShowAgePicker(false)}>
+                <Text style={styles.modalCancelText} allowFontScaling={false}>Annulla</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalTitle} allowFontScaling={false}>Seleziona Età</Text>
+              <TouchableOpacity onPress={() => setShowAgePicker(false)}>
+                <Text style={styles.modalDoneText} allowFontScaling={false}>Fatto</Text>
+              </TouchableOpacity>
+            </View>
+            <Picker
+              selectedValue={formData.age}
+              onValueChange={(value) => setFormData(prev => ({ ...prev, age: value }))}
+              style={styles.picker}
+              itemStyle={styles.pickerItem}
+            >
+              {Array.from({ length: 89 }, (_, i) => i + 12).map(age => (
+                <Picker.Item 
+                  key={age} 
+                  label={`${age} anni`} 
+                  value={age}
+                  color={BORDER_COLOR}
+                />
+              ))}
+            </Picker>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -482,132 +642,87 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: BACKGROUND_COLOR,
   },
-  scrollContent: {
-    flexGrow: 1,
-    paddingTop: Platform.OS === 'android' ? 20 : 0,
+  scrollView: {
+    flex: 1,
   },
+  scrollContent: {
+    paddingBottom: 20,
+  },
+  
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    marginBottom: 20,
+    paddingTop: Platform.OS === 'android' ? 40 : 16,
   },
   backButton: {
     padding: 8,
   },
-  headerTitle: {
-    fontSize: 24,
+  headerSpacer: {
+    width: 40,
+  },
+  
+  // Section Title
+  sectionTitleContainer: {
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    alignItems: 'center',
+  },
+  sectionTitle: {
+    fontSize: scaleFont(22),
     fontFamily: 'BricolageGrotesque-Bold',
     color: BORDER_COLOR,
-    flex: 1,
     textAlign: 'center',
-    marginHorizontal: 16,
   },
-  stepIndicatorWrapper: {
-    position: 'relative',
+  
+  // Progress Bar Semplice
+  progressContainer: {
+    paddingHorizontal: 20,
+    marginBottom: 32,
   },
-  stepIndicatorShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: 12,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE - 1,
-    left: SHADOW_OFFSET_VALUE - 1,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
-  },
-  stepIndicator: {
-    backgroundColor: '#4ECDC4',
-    borderRadius: 12,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    position: 'relative',
-    zIndex: 1,
-  },
-  stepIndicatorText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontFamily: 'BricolageGrotesque-SemiBold',
-  },
-  progressBarWrapper: {
-    position: 'relative',
-    marginHorizontal: 20,
-    marginBottom: 20,
-  },
-  progressBarShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: 4,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE - 1,
-    left: SHADOW_OFFSET_VALUE - 1,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
-  },
-  progressBarContainer: {
-    height: 8,
-    backgroundColor: '#E5E5E5',
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: BORDER_COLOR,
+  progressBar: {
+    height: 4,
+    backgroundColor: '#E0E0E0',
+    borderRadius: 2,
     overflow: 'hidden',
-    position: 'relative',
-    zIndex: 1,
+    marginBottom: 8,
   },
   progressFill: {
     height: '100%',
-    backgroundColor: '#4ECDC4',
-    borderRadius: 3,
+    backgroundColor: PRIMARY_GREEN,
+    borderRadius: 2,
+  },
+  progressText: {
+    fontSize: scaleFont(14),
+    fontFamily: 'BricolageGrotesque-Medium',
+    color: '#666666',
+    textAlign: 'center',
   },
   
-  // Step Cards
-  stepCardWrapper: {
-    position: 'relative',
-    marginHorizontal: 16,
-    marginBottom: 20,
-  },
-  stepCardShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: CARD_BORDER_RADIUS,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE,
-    left: SHADOW_OFFSET_VALUE,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
-  },
-  stepCardContainer: {
-    backgroundColor: CARD_BACKGROUND_COLOR,
-    borderRadius: CARD_BORDER_RADIUS,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    padding: 20,
-    position: 'relative',
-    zIndex: 1,
+
+  
+  // Step Container
+  stepContainer: {
+    paddingHorizontal: 16,
+    marginBottom: 24,
   },
   stepTitle: {
-    fontSize: 24,
+    fontSize: scaleFont(24),
     fontFamily: 'BricolageGrotesque-Bold',
     color: BORDER_COLOR,
-    marginBottom: 8,
-  },
-  stepDescription: {
-    fontSize: 16,
-    fontFamily: 'BricolageGrotesque-Regular',
-    color: '#666666',
     marginBottom: 24,
+    textAlign: 'center',
   },
   
   // Input Groups
   inputGroup: {
-    marginBottom: 24,
+    marginBottom: 20,
   },
   inputLabel: {
-    fontSize: 16,
+    fontSize: scaleFont(16),
     fontFamily: 'BricolageGrotesque-SemiBold',
     color: BORDER_COLOR,
     marginBottom: 8,
@@ -619,275 +734,36 @@ const styles = StyleSheet.create({
     backgroundColor: BORDER_COLOR,
     borderRadius: 12,
     position: 'absolute',
-    top: SHADOW_OFFSET_VALUE - 1,
-    left: SHADOW_OFFSET_VALUE - 1,
+    top: SHADOW_OFFSET_VALUE,
+    left: SHADOW_OFFSET_VALUE,
     width: '100%',
     height: '100%',
     zIndex: 0,
   },
-  inputWithUnit: {
+  inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: CARD_BACKGROUND_COLOR,
     borderRadius: 12,
     borderWidth: CARD_BORDER_WIDTH,
     borderColor: BORDER_COLOR,
-    paddingHorizontal: 16,
+    padding: 16,
     position: 'relative',
     zIndex: 1,
+    gap: 12,
   },
-  numericInput: {
+  inputValue: {
     flex: 1,
-    fontSize: 16,
-    fontFamily: 'BricolageGrotesque-Regular',
-    paddingVertical: 16,
-    color: BORDER_COLOR,
-  },
-  inputUnit: {
-    fontSize: 16,
+    fontSize: scaleFont(16),
     fontFamily: 'BricolageGrotesque-Medium',
-    color: '#666666',
-    marginLeft: 8,
+    color: BORDER_COLOR,
   },
   
   // Gender Selector
-  genderSelector: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  genderOptionWrapper: {
-    flex: 1,
+  genderWrapper: {
     position: 'relative',
   },
-  genderOptionShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: 12,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE - 1,
-    left: SHADOW_OFFSET_VALUE - 1,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
-  },
-  genderOption: {
-    backgroundColor: CARD_BACKGROUND_COLOR,
-    borderRadius: 12,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    paddingVertical: 16,
-    alignItems: 'center',
-    gap: 8,
-    position: 'relative',
-    zIndex: 1,
-  },
-  genderOptionSelected: {
-    backgroundColor: '#4ECDC4',
-    borderColor: '#4ECDC4',
-  },
-  genderOptionText: {
-    fontSize: 14,
-    fontFamily: 'BricolageGrotesque-Medium',
-    color: '#666666',
-  },
-  genderOptionTextSelected: {
-    color: '#FFFFFF',
-  },
-  
-  // Activity Options
-  activityOptionWrapper: {
-    position: 'relative',
-    marginBottom: 12,
-  },
-  activityOptionShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: 12,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE - 1,
-    left: SHADOW_OFFSET_VALUE - 1,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
-  },
-  activityOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: CARD_BACKGROUND_COLOR,
-    borderRadius: 12,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    padding: 16,
-    position: 'relative',
-    zIndex: 1,
-  },
-  activityOptionSelected: {
-    borderColor: '#4ECDC4',
-    backgroundColor: '#F0FDFC',
-  },
-  activityOptionIcon: {
-    marginRight: 16,
-  },
-  activityOptionContent: {
-    flex: 1,
-  },
-  activityOptionTitle: {
-    fontSize: 16,
-    fontFamily: 'BricolageGrotesque-SemiBold',
-    color: BORDER_COLOR,
-    marginBottom: 4,
-  },
-  activityOptionTitleSelected: {
-    color: '#4ECDC4',
-  },
-  activityOptionDescription: {
-    fontSize: 14,
-    fontFamily: 'BricolageGrotesque-Regular',
-    color: '#666666',
-  },
-  activityOptionCheck: {
-    marginLeft: 16,
-  },
-  
-  // Goal Options
-  goalOptionWrapper: {
-    position: 'relative',
-    marginBottom: 12,
-  },
-  goalOptionShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: 12,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE - 1,
-    left: SHADOW_OFFSET_VALUE - 1,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
-  },
-  goalOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: CARD_BACKGROUND_COLOR,
-    borderRadius: 12,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    padding: 16,
-    position: 'relative',
-    zIndex: 1,
-  },
-  goalOptionSelected: {
-    backgroundColor: '#F8F9FF',
-  },
-  goalOptionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 16,
-  },
-  goalOptionContent: {
-    flex: 1,
-  },
-  goalOptionTitle: {
-    fontSize: 16,
-    fontFamily: 'BricolageGrotesque-SemiBold',
-    color: BORDER_COLOR,
-    marginBottom: 4,
-  },
-  goalOptionTitleSelected: {
-    color: BORDER_COLOR,
-  },
-  goalOptionDescription: {
-    fontSize: 14,
-    fontFamily: 'BricolageGrotesque-Regular',
-    color: '#666666',
-  },
-  goalOptionCheck: {
-    marginLeft: 16,
-  },
-  
-  // Summary Card
-  summaryCardWrapper: {
-    position: 'relative',
-    marginTop: 16,
-  },
-  summaryCardShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: 16,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE - 1,
-    left: SHADOW_OFFSET_VALUE - 1,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
-  },
-  summaryCard: {
-    backgroundColor: CARD_BACKGROUND_COLOR,
-    borderRadius: 16,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    padding: 20,
-    position: 'relative',
-    zIndex: 1,
-  },
-  summaryHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  summaryHeaderText: {
-    marginLeft: 16,
-  },
-  summaryName: {
-    fontSize: 18,
-    fontFamily: 'BricolageGrotesque-Bold',
-    color: BORDER_COLOR,
-  },
-  summaryBmi: {
-    fontSize: 14,
-    fontFamily: 'BricolageGrotesque-Regular',
-    color: '#666666',
-    marginTop: 2,
-  },
-  summaryStats: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 20,
-  },
-  statItem: {
-    alignItems: 'center',
-  },
-  statValue: {
-    fontSize: 20,
-    fontFamily: 'BricolageGrotesque-Bold',
-    color: '#4ECDC4',
-  },
-  statLabel: {
-    fontSize: 12,
-    fontFamily: 'BricolageGrotesque-Regular',
-    color: '#666666',
-    marginTop: 4,
-  },
-  summaryDetails: {
-    borderTopWidth: 1,
-    borderTopColor: '#E5E5E5',
-    paddingTop: 16,
-    gap: 8,
-  },
-  summaryDetailText: {
-    fontSize: 14,
-    fontFamily: 'BricolageGrotesque-Regular',
-    color: '#666666',
-  },
-  
-  // Button Container
-  buttonContainer: {
-    padding: 20,
-    paddingBottom: 40,
-  },
-  nextButtonWrapper: {
-    position: 'relative',
-  },
-  nextButtonShadow: {
+  genderShadow: {
     backgroundColor: BORDER_COLOR,
     borderRadius: 12,
     position: 'absolute',
@@ -897,11 +773,196 @@ const styles = StyleSheet.create({
     height: '100%',
     zIndex: 0,
   },
-  nextButton: {
-    backgroundColor: '#4ECDC4',
+  genderContainer: {
+    flexDirection: 'row',
+    backgroundColor: CARD_BACKGROUND_COLOR,
     borderRadius: 12,
     borderWidth: CARD_BORDER_WIDTH,
     borderColor: BORDER_COLOR,
+    position: 'relative',
+    zIndex: 1,
+    padding: 4,
+  },
+  genderOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    gap: 4,
+  },
+  genderOptionSelected: {
+    backgroundColor: PRIMARY_GREEN,
+    borderColor: PRIMARY_GREEN,
+  },
+  genderOptionText: {
+    fontSize: scaleFont(14),
+    fontFamily: 'BricolageGrotesque-Medium',
+    color: '#666666',
+  },
+  genderOptionTextSelected: {
+    color: '#FFFFFF',
+  },
+  
+  // Option Cards (Activity & Goals)
+  optionWrapper: {
+    position: 'relative',
+    marginBottom: 12,
+  },
+  optionShadow: {
+    backgroundColor: BORDER_COLOR,
+    borderRadius: 12,
+    position: 'absolute',
+    top: SHADOW_OFFSET_VALUE,
+    left: SHADOW_OFFSET_VALUE,
+    width: '100%',
+    height: '100%',
+    zIndex: 0,
+  },
+  optionContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: CARD_BACKGROUND_COLOR,
+    borderRadius: 12,
+    borderWidth: CARD_BORDER_WIDTH,
+    borderColor: BORDER_COLOR,
+    padding: 16,
+    position: 'relative',
+    zIndex: 1,
+    gap: 12,
+  },
+  optionContainerSelected: {
+    backgroundColor: PRIMARY_GREEN,
+    borderColor: PRIMARY_GREEN,
+  },
+  optionContent: {
+    flex: 1,
+  },
+  optionTitle: {
+    fontSize: scaleFont(16),
+    fontFamily: 'BricolageGrotesque-SemiBold',
+    color: BORDER_COLOR,
+    marginBottom: 2,
+  },
+  optionTitleSelected: {
+    color: '#FFFFFF',
+  },
+  optionDescription: {
+    fontSize: scaleFont(14),
+    fontFamily: 'BricolageGrotesque-Regular',
+    color: '#666666',
+  },
+  optionDescriptionSelected: {
+    color: 'rgba(255, 255, 255, 0.8)',
+  },
+  
+  // Summary
+  summaryWrapper: {
+    position: 'relative',
+    marginTop: 8,
+  },
+  summaryShadow: {
+    backgroundColor: BORDER_COLOR,
+    borderRadius: 12,
+    position: 'absolute',
+    top: SHADOW_OFFSET_VALUE,
+    left: SHADOW_OFFSET_VALUE,
+    width: '100%',
+    height: '100%',
+    zIndex: 0,
+  },
+  summaryContainer: {
+    backgroundColor: CARD_BACKGROUND_COLOR,
+    borderRadius: 12,
+    borderWidth: CARD_BORDER_WIDTH,
+    borderColor: BORDER_COLOR,
+    padding: 20,
+    position: 'relative',
+    zIndex: 1,
+  },
+  summaryHeader: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  summaryMainValue: {
+    fontSize: scaleFont(36),
+    fontFamily: 'BricolageGrotesque-Bold',
+    color: PRIMARY_GREEN,
+  },
+  summaryMainLabel: {
+    fontSize: scaleFont(16),
+    fontFamily: 'BricolageGrotesque-Medium',
+    color: '#666666',
+    marginBottom: 8,
+  },
+  summaryBmi: {
+    fontSize: scaleFont(14),
+    fontFamily: 'BricolageGrotesque-Regular',
+    color: '#666666',
+  },
+  macroGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  macroItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  macroIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  macroLabel: {
+    fontSize: scaleFont(12),
+    fontFamily: 'BricolageGrotesque-Regular',
+    color: '#666666',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  macroValue: {
+    fontSize: scaleFont(16),
+    fontFamily: 'BricolageGrotesque-Bold',
+    color: BORDER_COLOR,
+    textAlign: 'center',
+  },
+  summaryNote: {
+    fontSize: scaleFont(14),
+    fontFamily: 'BricolageGrotesque-Regular',
+    color: '#666666',
+    textAlign: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    paddingTop: 16,
+  },
+  
+  // Button
+  buttonWrapper: {
+    position: 'relative',
+    marginHorizontal: 16,
+  },
+  buttonShadow: {
+    backgroundColor: BORDER_COLOR,
+    borderRadius: 12,
+    position: 'absolute',
+    top: SHADOW_OFFSET_VALUE,
+    left: SHADOW_OFFSET_VALUE,
+    width: '100%',
+    height: '100%',
+    zIndex: 0,
+  },
+  buttonContainer: {
+    backgroundColor: PRIMARY_GREEN,
+    borderRadius: 12,
     paddingVertical: 16,
     flexDirection: 'row',
     alignItems: 'center',
@@ -910,12 +971,189 @@ const styles = StyleSheet.create({
     position: 'relative',
     zIndex: 1,
   },
-  nextButtonDisabled: {
+  buttonDisabled: {
     opacity: 0.6,
   },
-  nextButtonText: {
+  buttonText: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: scaleFont(16),
     fontFamily: 'BricolageGrotesque-SemiBold',
   },
+  
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: CARD_BACKGROUND_COLOR,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: Platform.OS === 'ios' ? 34 : 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5E5',
+  },
+  modalTitle: {
+    fontSize: scaleFont(18),
+    fontFamily: 'BricolageGrotesque-SemiBold',
+    color: BORDER_COLOR,
+  },
+  modalCancelText: {
+    fontSize: scaleFont(16),
+    fontFamily: 'BricolageGrotesque-Regular',
+    color: '#666666',
+  },
+  modalDoneText: {
+    fontSize: scaleFont(16),
+    fontFamily: 'BricolageGrotesque-SemiBold',
+    color: PRIMARY_GREEN,
+  },
+  picker: {
+    height: 200,
+    backgroundColor: CARD_BACKGROUND_COLOR,
+  },
+  pickerItem: {
+    color: BORDER_COLOR,
+    fontSize: 18,
+    fontFamily: 'BricolageGrotesque-Regular',
+  },
+  
+  
+  // New styles for the new step 1 layout
+  dataFieldWrapper: {
+    position: 'relative',
+    marginBottom: 20,
+  },
+  dataFieldShadow: {
+    backgroundColor: BORDER_COLOR,
+    borderRadius: 12,
+    position: 'absolute',
+    top: SHADOW_OFFSET_VALUE,
+    left: SHADOW_OFFSET_VALUE,
+    width: '100%',
+    height: '100%',
+    zIndex: 0,
+  },
+  dataFieldContainer: {
+    backgroundColor: CARD_BACKGROUND_COLOR,
+    borderRadius: 12,
+    borderWidth: CARD_BORDER_WIDTH,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 20,
+    gap: 12,
+  },
+  dataFieldLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  dataFieldIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dataFieldInfo: {
+    flexDirection: 'column',
+  },
+  dataFieldLabel: {
+    fontSize: scaleFont(16),
+    fontFamily: 'BricolageGrotesque-SemiBold',
+    color: BORDER_COLOR,
+  },
+  dataFieldDescription: {
+    fontSize: scaleFont(14),
+    fontFamily: 'BricolageGrotesque-Regular',
+    color: '#666666',
+  },
+  dataFieldValue: {
+    fontSize: scaleFont(16),
+    fontFamily: 'BricolageGrotesque-Bold',
+    color: BORDER_COLOR,
+  },
+  dataFieldRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+
+
+  genderOptionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  genderOptionButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F8F9FA',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  genderOptionButtonSelected: {
+    backgroundColor: PRIMARY_GREEN,
+    borderColor: PRIMARY_GREEN,
+  },
+  
+  // Value Badge Styles
+  valueContainer: {
+    alignItems: 'center',
+  },
+  valueBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    gap: 4,
+  },
+  valueNumber: {
+    fontSize: scaleFont(16),
+    fontFamily: 'BricolageGrotesque-Bold',
+  },
+  valueUnit: {
+    fontSize: scaleFont(12),
+    fontFamily: 'BricolageGrotesque-Medium',
+  },
+  
+  // Fixed Bottom Button
+  bottomButtonContainer: {
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    paddingTop: 16,
+    backgroundColor: BACKGROUND_COLOR,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E5E5',
+  },
+  continueButton: {
+    backgroundColor: PRIMARY_GREEN,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    borderRadius: 12,
+    gap: 8,
+  },
+  continueButtonText: {
+    color: '#FFFFFF',
+    fontSize: scaleFont(16),
+    fontFamily: 'BricolageGrotesque-Bold',
+  },
+  
 }); 

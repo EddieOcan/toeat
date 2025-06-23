@@ -2,7 +2,8 @@
 
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons'; // Aggiunto per la freccia
+import { Ionicons } from '@expo/vector-icons';
+import { scaleFont } from '../theme/typography'; // Aggiunto per la freccia
 import { useTheme } from "../contexts/ThemeContext";
 
 // Interfaccia per le props del componente
@@ -107,7 +108,10 @@ const ScoreIndicatorCard: React.FC<ScoreIndicatorCardProps> = ({
       {/* Contenitore per testo - RENDERIZZATO SOLO SE titolo o descrizione sono presenti */}
       {(title.trim() !== '' || description.trim() !== '') && (
           <View style={[styles.textContainer, isInline && styles.textContainerInline]}>
-          <Text style={[styles.titleText, isSmall && styles.titleTextSmall, isInline && styles.titleTextInline]}>
+          <Text 
+            style={[styles.titleText, isSmall && styles.titleTextSmall, isInline && styles.titleTextInline]}
+            allowFontScaling={false}
+          >
               {title}
           </Text>
           {isInline && (
@@ -120,7 +124,10 @@ const ScoreIndicatorCard: React.FC<ScoreIndicatorCardProps> = ({
       <View style={styles.modernContainer}>
         {isValueTrulyMissing ? (
           <View style={styles.missingValueDisplay}>
-            <Text style={[styles.missingValueText, isSmall && styles.missingValueTextSmall]}>
+            <Text 
+              style={[styles.missingValueText, isSmall && styles.missingValueTextSmall]}
+              allowFontScaling={false}
+            >
               Dato non disponibile
             </Text>
           </View>
@@ -133,11 +140,14 @@ const ScoreIndicatorCard: React.FC<ScoreIndicatorCardProps> = ({
                 isSmall && styles.scoreCircleSmall,
                 { backgroundColor: (SCORE_COLORS[normalizedValueForColor] || SCORE_COLORS['unknown']).background }
               ]}>
-                <Text style={[
-                  styles.scoreValueText,
-                  isSmall && styles.scoreValueTextSmall,
-                  { color: (SCORE_COLORS[normalizedValueForColor] || SCORE_COLORS['unknown']).text }
-                ]}>
+                <Text 
+                  style={[
+                    styles.scoreValueText,
+                    isSmall && styles.scoreValueTextSmall,
+                    { color: (SCORE_COLORS[normalizedValueForColor] || SCORE_COLORS['unknown']).text }
+                  ]}
+                  allowFontScaling={false}
+                >
                   {normalizedValueForColor}
                 </Text>
               </View>
@@ -169,7 +179,10 @@ const ScoreIndicatorCard: React.FC<ScoreIndicatorCardProps> = ({
       {/* Descrizione (separata dal titolo) */}
       {description.trim() !== '' && (
         <View style={styles.descriptionContainer}>
-          <Text style={[styles.descriptionText, isSmall && styles.descriptionTextSmall]}>
+          <Text 
+            style={[styles.descriptionText, isSmall && styles.descriptionTextSmall]}
+            allowFontScaling={false}
+          >
             {description}
           </Text>
         </View>
@@ -258,14 +271,14 @@ const styles = StyleSheet.create({
     marginBottom: 6, // Ridotto da 15 a 6
   },
   titleText: {
-    fontSize: 18,
+    fontSize: scaleFont(18),
     fontFamily: 'BricolageGrotesque-SemiBold',
     color: BORDER_COLOR,
     textAlign: 'center', // Default per stacked
     marginBottom: 2, // Ridotto spazio sotto il titolo
   },
   titleTextSmall: {
-    fontSize: 15, // Testo più piccolo
+    fontSize: scaleFont(15), // Testo più piccolo
     marginBottom: 1, // Spazio ridotto (solo stacked)
   },
   titleTextInline: {
@@ -281,13 +294,13 @@ const styles = StyleSheet.create({
     marginTop: 6, // Ridotto spazio sopra la descrizione
   },
   descriptionText: {
-    fontSize: 14,
+    fontSize: scaleFont(14),
     fontFamily: 'BricolageGrotesque-Regular',
     color: '#666',
     textAlign: 'center',
   },
   descriptionTextSmall: {
-    fontSize: 12, // Testo più piccolo
+    fontSize: scaleFont(12), // Testo più piccolo
   },
   scaleContainer: {
     flexDirection: 'row',
@@ -385,14 +398,14 @@ const styles = StyleSheet.create({
   },
   
   missingValueText: {
-    fontSize: 16,
+    fontSize: scaleFont(16),
     fontFamily: 'BricolageGrotesque-Medium',
     color: SCALE_BAR_TEXT_COLOR_INACTIVE,
     textAlign: 'center',
   },
   
   missingValueTextSmall: {
-    fontSize: 14,
+    fontSize: scaleFont(14),
   },
 
   // --- LAYOUT STYLES ---
@@ -493,12 +506,12 @@ const styles = StyleSheet.create({
   },
 
   scoreValueText: {
-    fontSize: 28,
+    fontSize: scaleFont(28),
     fontFamily: 'BricolageGrotesque-Bold',
   },
 
   scoreValueTextSmall: {
-    fontSize: 22,
+    fontSize: scaleFont(22),
   },
 
   scoreProgressBar: {

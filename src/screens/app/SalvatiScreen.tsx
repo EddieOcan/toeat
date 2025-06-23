@@ -19,20 +19,10 @@ import EmptyState from "../../components/EmptyState"
 import { useFocusEffect } from '@react-navigation/native'
 import AppText from "../../components/AppText"
 import { Ionicons } from "@expo/vector-icons"
+import { getScoreColor } from "../../utils/formatters"
+import { scaleFont } from "../../theme/typography"
 
-// --- NUOVA FUNZIONE HELPER PER COLORE DA PUNTEGGIO NUMERICO ---
-const getColorFromNumericScore = (score: number | undefined | null, themeColors: any): string => {
-  const defaultColor = themeColors.textMuted || '#888888'; 
-  if (score === undefined || score === null) return defaultColor;
-
-  if (score >= 81) return '#1E8F4E'; // Verde Scuro (Nutri-A)
-  if (score >= 61) return '#7AC547'; // Verde Chiaro (Nutri-B)
-  if (score >= 41) return '#FFC734'; // Giallo (Nutri-C)
-  if (score >= 21) return '#FF9900'; // Arancione (Nutri-D)
-  if (score >= 0) return '#FF0000';   // Rosso (Nutri-E)
-  return defaultColor; // Fallback se score < 0 (improbabile)
-};
-// --- FINE NUOVA FUNZIONE HELPER ---
+// Funzioni helper rimosse - ora si usa getScoreColor globale
 
 // Sposto le costanti globali del modulo qui, prima del loro primo utilizzo
 const CARD_BORDER_WIDTH = 1.5;
@@ -99,106 +89,68 @@ const SalvatiScreen: React.FC<Props> = ({ navigation }) => {
     loadFavoriteProducts()
   }
 
-  const getScoreColor = (grade: string | undefined | null, type: 'nutri' | 'eco', numericScore?: number | undefined | null) => {
-    // Priorità al grade letterale se disponibile e valido
-    if (grade && typeof grade === 'string' && grade.toLowerCase() !== 'unknown') {
-      if (type === 'nutri') {
-        switch (grade.toLowerCase()) {
-          case "a": return '#2ECC71'; 
-          case "b": return '#82E0AA'; 
-          case "c": return '#F4D03F'; 
-          case "d": return '#E67E22'; 
-          case "e": return '#EC7063'; 
-          default: break; 
-        }
-      } else { // eco
-        switch (grade.toLowerCase()) {
-          case "a": return '#1D8348'; 
-          case "b": return '#28B463'; 
-          case "c": return '#F5B041'; 
-          case "d": return '#DC7633'; 
-          case "e": return '#BA4A00'; 
-          default: break; 
-        }
-      }
-    }
-    
-    // Caso speciale per ecoscore mancante
-    if (type === 'eco' && (!grade || !numericScore)) {
-      return '#888888'; // Grigio per ecoscore mancante
-    }
-    
-    // Se il grade non è valido o non c'è, usa il punteggio numerico
-    return getColorFromNumericScore(numericScore, colors); // Passa colors per defaultColor
-  };
+  // Funzione getScoreColor locale rimossa - ora si usa quella globale
 
-  const renderFavoriteItem = ({ item }: { item: FavoriteProduct }) => (
-    <View style={styles.productCardWrapper}> 
-      <View style={[styles.buttonSolidShadow, styles.productCardShadow]} />
-      <TouchableOpacity
-        style={styles.productCardContainer} 
-        onPress={() => {
-          if (item.id) { 
-            navigation.navigate("ProductDetail", { productRecordId: item.id });
-          } else {
-            Alert.alert("Errore", "ID prodotto non valido per visualizzare i dettagli.");
-          }
-        }}
-        activeOpacity={0.8}
-      >
-        <View style={styles.productImageWrapper}>
-          <View style={[styles.productImageDirectedShadow, { borderRadius: styles.productCardImage.borderRadius }]} />
-          <Image
-            source={{ uri: item.product_image || undefined }}
-            style={styles.productCardImage}
-            defaultSource={require('../../../assets/icon.png')} 
-          />
-        </View>
-        <View style={styles.productCardContent}>
-          <AppText style={[styles.productCardName, { color: "#000000" /* colors.text */ }]} numberOfLines={2}>
-            {item.product_name || "Nome non disponibile"}
-          </AppText>
-          <AppText style={[styles.productCardBrand, { color: "#333333" /* colors.textMuted */  }]}>
-            {item.brand || "Marca non disponibile"}
-          </AppText>
-          
-          <View style={styles.scoresRowContainer}> 
-            {item.health_score !== undefined && (
-              <View style={[styles.scoreIconTextContainer, { marginLeft: 0 }]}>
-                <Ionicons 
-                  name="heart" 
-                  size={18} 
-                  color={getScoreColor(item.nutrition_grade, 'nutri', item.health_score)} 
-                  style={styles.scoreIcon} 
-                />
-                <AppText style={[styles.scoreValueText, { color: "#000000" /* colors.text */ }]}>
-                  {item.health_score}
-                </AppText>
-              </View>
-            )}
+  const renderFavoriteItem = ({ item }: { item: FavoriteProduct }) => {
+    // Determina il colore della card basato sul punteggio salute
+    const cardColor = item.health_score !== undefined ? getScoreColor(item.health_score) : '#000000';
 
-            {/* Mostro sempre l'icona ecoscore, anche se mancante */}
-                <View style={[styles.scoreIconTextContainer, { marginLeft: item.health_score !== undefined ? 15 : 0} ]}>
-                    <Ionicons 
-                        name="leaf" 
-                        size={18} 
-                        color={getScoreColor(item.ecoscore_grade, 'eco', item.sustainability_score ?? item.ecoscore_score)} 
-                        style={styles.scoreIcon}
-                    />
-                    <AppText style={[styles.scoreValueText, 
-                        (item.sustainability_score === undefined && item.ecoscore_score === undefined) 
-                            ? {color: "#888888"} 
-                            : {color: "#000000"}]}>
-                        {(item.sustainability_score !== undefined || item.ecoscore_score !== undefined)
-                            ? (item.sustainability_score !== undefined ? item.sustainability_score : item.ecoscore_score)
-                            : "--"}
-                    </AppText>
-                </View>
+    return (
+      <View style={styles.productCardWrapper}> 
+        <View style={[styles.buttonSolidShadow, styles.productCardShadow, { backgroundColor: cardColor }]} />
+        <TouchableOpacity
+          style={[styles.productCardContainer, { borderColor: cardColor }]} 
+          onPress={() => {
+            if (item.id) { 
+              navigation.navigate("ProductDetail", { productRecordId: item.id });
+            } else {
+              Alert.alert("Errore", "ID prodotto non valido per visualizzare i dettagli.");
+            }
+          }}
+          activeOpacity={1}
+        >
+          <View style={styles.productImageWrapper}>
+            <View style={[styles.productImageDirectedShadow, { borderRadius: styles.productCardImage.borderRadius, backgroundColor: cardColor }]} />
+            <Image
+              source={{ uri: item.product_image || undefined }}
+              style={[styles.productCardImage, { borderColor: cardColor }]}
+              defaultSource={require('../../../assets/icon.png')} 
+            />
           </View>
-        </View>
-      </TouchableOpacity>
-    </View>
-  );
+          <View style={styles.productCardContent}>
+            <AppText 
+              style={[styles.productCardName, { color: "#000000" }]} 
+              numberOfLines={2}
+              ellipsizeMode="tail"
+            >
+              {item.product_name || "Nome non disponibile"}
+            </AppText>
+            
+            <View style={styles.scoresRowContainer}> 
+              <View style={styles.scoreButtonsContainer}>
+                {item.health_score !== undefined && (
+                  <View style={[styles.scoreButton, { backgroundColor: getScoreColor(item.health_score) }]}>
+                    <Ionicons name="heart" size={14} color="#FFFFFF" />
+                    <AppText style={styles.scoreButtonText}>
+                      {item.health_score}
+                    </AppText>
+                  </View>
+                )}
+                {((item.sustainability_score !== undefined && item.sustainability_score > 0) || (item.ecoscore_score !== undefined && item.ecoscore_score > 0)) && (
+                  <View style={[styles.scoreButton, { backgroundColor: getScoreColor(item.sustainability_score ?? item.ecoscore_score) }]}>
+                    <Ionicons name="leaf" size={14} color="#FFFFFF" />
+                    <AppText style={styles.scoreButtonText}>
+                      {item.sustainability_score ?? item.ecoscore_score}
+                    </AppText>
+                  </View>
+                )}
+              </View>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   if (loading && !refreshing) {
     return (
@@ -333,7 +285,7 @@ const styles = StyleSheet.create({
     borderColor: '#000000',
     position: 'relative',
     zIndex: 1, 
-    resizeMode: 'contain',
+    resizeMode: 'cover',
   },
   productCardContent: {
     flex: 1,
@@ -369,6 +321,30 @@ const styles = StyleSheet.create({
   scoreValueText: {
     fontSize: 15,
     fontFamily: "BricolageGrotesque-SemiBold",
+  },
+  // Nuovi stili per i pulsanti dei punteggi (copiati da RecentProductsSection)
+  scoreButtonsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: 10,
+    marginTop: 8,
+  },
+  scoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    minWidth: 50,
+  },
+  scoreButtonText: {
+    fontSize: scaleFont(12),
+    fontFamily: "BricolageGrotesque-Bold",
+    color: '#FFFFFF',
+    marginLeft: 4,
+    letterSpacing: 0.2,
   },
 });
 

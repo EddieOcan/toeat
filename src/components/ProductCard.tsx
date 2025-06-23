@@ -184,7 +184,7 @@ const ProductCard: React.FC<ProductCardProps> = ({
               </View>
             )}
 
-            {sustainabilityScore && (
+                      {sustainabilityScore && sustainabilityScore > 0 && (
               <View style={styles.scoreContainer}>
                 <Ionicons name="leaf" size={14} color={getScoreColor(sustainabilityScore)} style={styles.scoreIcon} />
                 <Text style={[styles.scoreText, { color: getScoreColor(sustainabilityScore) }]}>

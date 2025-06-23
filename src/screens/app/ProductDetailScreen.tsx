@@ -19,6 +19,8 @@ import {
   TextInput, // Unico import da 'react-native'
   Dimensions,
   findNodeHandle, // <<< AGGIUNTO QUESTO
+  Modal,
+  KeyboardAvoidingView,
 } from "react-native"
 import { useTheme } from "../../contexts/ThemeContext"
 import type { NativeStackScreenProps } from "@react-navigation/native-stack"
@@ -26,6 +28,7 @@ import type { AppStackParamList } from "../../navigation"
 import { Ionicons } from "@expo/vector-icons"
 import { useAuth } from "../../contexts/AuthContext"
 import { useNavigation } from "@react-navigation/native"
+import { usePhotoAnalysis } from "../../contexts/PhotoAnalysisContext"
 import {
   getProductRecordById,
   isProductInFavorites,
@@ -39,8 +42,9 @@ import {
   saveProductWithIngredients,
   updateProductIngredientsInDb, // <-- Importa la nuova funzione
 } from "../../services/api"
+import { addProductToDay } from "../../services/nutritionApi"
 import EmptyState from "../../components/EmptyState"
-import { formatNutritionValue, getNutritionGradeLabel, getEcoScoreLabel } from "../../utils/formatters"
+import { formatNutritionValue, getNutritionGradeLabel, getEcoScoreLabel, getScoreColor } from "../../utils/formatters"
 import HealthScoreIndicator from "../../components/HealthScoreIndicator"
 import SustainabilityScoreIndicator from "../../components/SustainabilityScoreIndicator"
 import type { GeminiAnalysisResult, EstimatedIngredient } from "../../services/gemini"
@@ -48,7 +52,8 @@ import { StatusBar } from 'expo-status-bar';
 import { StatusBar as RNStatusBar } from 'react-native';
 import ScoreIndicatorCard from '../../components/ScoreIndicatorCard';
 
-import { getCaloriesForSingleIngredientFromGeminiAiSdk } from "../../services/gemini"; // IMPORTAZIONE NUOVA FUNZIONE
+import { getCaloriesForSingleIngredientFromGeminiAiSdk, NUTRI_SCORE_DESCRIPTIONS, ECO_SCORE_DESCRIPTIONS, NOVA_DESCRIPTIONS } from "../../services/gemini"; // IMPORTAZIONE NUOVA FUNZIONE
+import { scaleFont } from '../../theme/typography';
 
 // *** NUOVO CODICE: DEBUG FLAG ***
 const DEBUG_CALORIES = true; 
@@ -118,19 +123,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-// --- NUOVA FUNZIONE HELPER PER COLORE DA PUNTEGGIO NUMERICO ---
-const getColorFromNumericScore = (score: number | undefined | null, themeColors: any): string => {
-  const defaultColor = themeColors.textMuted || '#888888'; 
-  if (score === undefined || score === null) return defaultColor;
-
-  if (score >= 81) return '#1E8F4E'; // Verde Scuro (Nutri-A)
-  if (score >= 61) return '#7AC547'; // Verde Chiaro (Nutri-B)
-  if (score >= 41) return '#FFC734'; // Giallo (Nutri-C)
-  if (score >= 21) return '#FF9900'; // Arancione (Nutri-D)
-  if (score >= 0) return '#FF0000';   // Rosso (Nutri-E)
-  return defaultColor; // Fallback se score < 0 (improbabile)
-};
-// --- FINE NUOVA FUNZIONE HELPER ---
+// Funzioni helper rimosse - ora si usa getScoreColor globale
 
 // Tipo per gli item degli score (simile a pros/cons ma con info aggiuntive)
 type ScoreItem = {
@@ -187,53 +180,91 @@ type ProductDetailScreenRouteParams = {
   aiAnalysisResult?: GeminiAnalysisResult | null;
   isPhotoAnalysis?: boolean; // Nuovo parametro per distinguere l'analisi foto
   isUpdate?: boolean; // Flag per indicare che è un aggiornamento di una pagina esistente
+  openedFromDiary?: boolean; // Nuovo parametro per indicare che è stato aperto dal diario
+  shouldStartAiAnalysis?: boolean; // Flag per avviare l'analisi AI per prodotti scansionati senza AI
 };
 
 type Props = NativeStackScreenProps<AppStackParamList, "ProductDetail">;
 
 const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
-  const { productRecordId, initialProductData: routeInitialProductData, aiAnalysisResult: routeAiAnalysisResult, isPhotoAnalysis, isUpdate } = route.params as ProductDetailScreenRouteParams;
+  const { productRecordId, initialProductData: routeInitialProductData, aiAnalysisResult: routeAiAnalysisResult, isPhotoAnalysis, isUpdate, openedFromDiary, shouldStartAiAnalysis } = route.params as ProductDetailScreenRouteParams;
   
+  // TUTTI GLI HOOKS DI STATO ALL'INIZIO DEL COMPONENTE
   const [displayProductInfo, setDisplayProductInfo] = useState<RawProductData | ProductRecord | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState<GeminiAnalysisResult | null>(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [loadingInitialData, setLoadingInitialData] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
-  const [savingFavorite, setSavingFavorite] = useState(false)
-  const [isFavorite, setIsFavorite] = useState(false)
-  const { colors } = useTheme()
-  const { user } = useAuth()
-  const navigationHook = useNavigation();
-
-  // Nuovo stato per elementi espandibili
+  const [savingFavorite, setSavingFavorite] = useState(false);
+  const [isFavorite, setIsFavorite] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Record<string, boolean>>({});
-
-  // NUOVI STATI PER INGREDIENTI MODIFICABILI (ANALISI FOTO BREAKDOWN)
   const [editableIngredients, setEditableIngredients] = useState<EstimatedIngredient[] | null>(null);
   const [totalEstimatedCalories, setTotalEstimatedCalories] = useState<number | null>(null);
-  // Salva una copia originale del breakdown per il ricalcolo proporzionale
-  const originalIngredientsBreakdownRef = useRef<EstimatedIngredient[] | null>(null);
-  // Stato per l'aggiunta di nuovi ingredienti
   const [isAddingIngredient, setIsAddingIngredient] = useState(false);
   const [newIngredientName, setNewIngredientName] = useState("");
   const [newIngredientWeight, setNewIngredientWeight] = useState("");
-  const [newIngredientQuantity, setNewIngredientQuantity] = useState("1"); // Nuovo stato per quantità
-  // Stato per modifiche non salvate
+  const [newIngredientQuantity, setNewIngredientQuantity] = useState("1");
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
-  // Stato per il salvataggio in corso
   const [isSavingIngredients, setIsSavingIngredients] = useState(false);
-
-  // Nuovi stati per gestire il focus degli input
   const [weightInputFocused, setWeightInputFocused] = useState<string | null>(null);
   const [nameInputFocused, setNameInputFocused] = useState(false);
-
-  // Aggiungi nuovi stati per gestire il loading UX migliorato
   const [showLoadingAnimation, setShowLoadingAnimation] = useState(false);
   const [currentLoadingMessage, setCurrentLoadingMessage] = useState("");
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
+  const [showQuantityModal, setShowQuantityModal] = useState(false);
+  const [quantity, setQuantity] = useState('100');
+  const [addingToTracking, setAddingToTracking] = useState(false);
 
-  // Messaggi di caricamento che si alternano
+  // HOOKS DI CONTESTO
+  const { currentAnalysis, clearAnalysis, isAnalyzing: isPhotoAnalyzing } = usePhotoAnalysis();
+  const { colors } = useTheme();
+  const { user } = useAuth();
+  const navigationHook = useNavigation();
+
+  // REFS
+  const originalIngredientsBreakdownRef = useRef<EstimatedIngredient[] | null>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const inputRefs = useRef<{[key: string]: { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => void } | null}>({});
+  const dataCache = useRef(new Map<string, { timestamp: number, data: any }>()).current;
+  const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const debouncedApiCalls = useRef(new Map<string, NodeJS.Timeout>()).current;
+
+  // MEMO HOOKS
+  const disableFavoriteFeature = useMemo(() => {
+    return isPhotoAnalysis && (!productRecordId || productRecordId === "temp_visual_scan");
+  }, [isPhotoAnalysis, productRecordId]);
+
+  const isProductFromBarcodeScan = useMemo(() => {
+    if (!displayProductInfo) return false;
+    
+    const hasValidBarcode = 
+      ('barcode' in displayProductInfo && displayProductInfo.barcode && displayProductInfo.barcode !== 'temp_visual_scan') ||
+      ('code' in displayProductInfo && displayProductInfo.code && displayProductInfo.code !== 'temp_visual_scan');
+    
+    const isNotPhotoAnalysis = !isProductFromPhotoAnalysis(isPhotoAnalysis, displayProductInfo, aiAnalysis);
+    
+    return hasValidBarcode && isNotPhotoAnalysis;
+  }, [displayProductInfo, isPhotoAnalysis, aiAnalysis]);
+
+  // CALLBACK HOOKS
+  const getCachedData = useCallback((key: string) => {
+    const cached = dataCache.get(key);
+    const now = Date.now();
+    const CACHE_DURATION = 60000; // 1 minuto di cache
+    
+    if (cached && (now - cached.timestamp < CACHE_DURATION)) {
+      console.log(`[CACHE HIT] Utilizzando dati dalla cache per ${key}`);
+      return cached.data;
+    }
+    
+    return null;
+  }, []);
+  
+  const setCachedData = useCallback((key: string, data: any) => {
+    dataCache.set(key, { timestamp: Date.now(), data });
+  }, []);
+
+  // COSTANTI E CONFIGURAZIONI
   const loadingMessages = [
     "Analisi valori nutrizionali...",
     "Analisi del livello di lavorazione industriale...",
@@ -242,33 +273,6 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     "Generazione raccomandazioni..."
   ];
 
-  // Riferimento allo ScrollView per lo scroll automatico
-  const scrollViewRef = useRef<ScrollView>(null);
-  // Riferimenti per i componenti che potrebbero richiedere lo scroll
-  const inputRefs = useRef<{[key: string]: { measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => void } | null}>({}); 
-
-  // Determina se le funzionalità dei preferiti devono essere disabilitate
-  const disableFavoriteFeature = useMemo(() => {
-    // Disabilita se è un'analisi foto E non c'è un ID prodotto valido (diverso da temp_visual_scan)
-    return isPhotoAnalysis && (!productRecordId || productRecordId === "temp_visual_scan");
-  }, [isPhotoAnalysis, productRecordId]);
-
-  // Funzione per determinare se è un prodotto scansionato con barcode
-  const isProductFromBarcodeScan = useMemo(() => {
-    if (!displayProductInfo) return false;
-    
-    // Verifica se ha un barcode valido (non temp_visual_scan)
-    const hasValidBarcode = 
-      ('barcode' in displayProductInfo && displayProductInfo.barcode && displayProductInfo.barcode !== 'temp_visual_scan') ||
-      ('code' in displayProductInfo && displayProductInfo.code && displayProductInfo.code !== 'temp_visual_scan');
-    
-    // Non è un prodotto da analisi foto
-    const isNotPhotoAnalysis = !isProductFromPhotoAnalysis(isPhotoAnalysis, displayProductInfo, aiAnalysis);
-    
-    return hasValidBarcode && isNotPhotoAnalysis;
-  }, [displayProductInfo, isPhotoAnalysis, aiAnalysis]);
-
-  // Stile per l'indicatore di caricamento minimale
   const aiLoadingMinimalStyle: { container: ViewStyle, text: TextStyle } = {
     container: {
       flexDirection: 'row', 
@@ -284,62 +288,55 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     }
   };
 
-  // Costanti per lo stile "bordo direzionato"
   const CARD_BORDER_WIDTH = 2;
   const SHADOW_OFFSET_VALUE = 2.5;
   const BORDER_COLOR = "#000";
   const BACKGROUND_COLOR = "#f8f4ec";
-  const CARD_BACKGROUND_COLOR = "#FFFFFF"; // Per le card bianche dei pro/contro
-
-  // Costanti dalla HomeScreen per coerenza (verificare se già definite o se servono precise)
-  const COMMON_BORDER_WIDTH = 2; // Già CARD_BORDER_WIDTH, usiamo quella
-  const IMAGE_SHADOW_OFFSET = 2; // Offset per l' gestirle chiaombra dell'immagine dentro la card
-
-  // Costanti per le "pillole" dei valori nutrizionali
+  const CARD_BACKGROUND_COLOR = "#FFFFFF";
+  const COMMON_BORDER_WIDTH = 2;
+  const IMAGE_SHADOW_OFFSET = 2;
   const PILL_BORDER_WIDTH = 1.5;
   const PILL_SHADOW_OFFSET = 1.5;
   const PILL_BORDER_RADIUS = 15;
   const PILL_HEIGHT = 48; 
-  const ICON_PILL_SIZE = 48; 
+  const ICON_PILL_SIZE = 48;
 
+  // FUNZIONI HELPER
   const getNutrientIconName = (nutrientKey: string): string => {
     switch (nutrientKey) {
       case 'energy_kcal_100g': return 'flame';
-      case 'fat_100g': return 'cafe'; // Cambiato da 'water' a 'cafe' (icona di una goccia di olio/grasso)
-      case 'saturated_fat_100g': return 'ellipse'; // Non ha versione piena standard, usiamo outline
+      case 'fat_100g': return 'cafe';
+      case 'saturated_fat_100g': return 'ellipse';
       case 'carbohydrates_100g': return 'layers';
       case 'sugars_100g': return 'cube';
-      case 'fiber_100g': return 'analytics'; // Non ha versione piena standard, usiamo outline
+      case 'fiber_100g': return 'analytics';
       case 'proteins_100g': return 'barbell';
-      case 'salt_100g': return 'grid'; // Non ha versione piena standard, usiamo outline
-      default: return 'help-circle'; // Usiamo versione piena
+      case 'salt_100g': return 'grid';
+      default: return 'help-circle';
     }
   };
 
   const getNutrientIconColor = (nutrientKey: string): string => {
     switch (nutrientKey) {
-      case 'energy_kcal_100g': return '#FFA07A'; // LightSalmon (Arancione chiaro)
-      case 'fat_100g': return '#87CEEB';       // SkyBlue (Blu cielo)
-      case 'saturated_fat_100g': return '#DA70D6'; // Orchid (Viola chiaro)
-      case 'carbohydrates_100g': return '#FFD700'; // Gold (Giallo oro)
-      case 'sugars_100g': return '#FFB6C1';    // LightPink (Rosa chiaro)
-      case 'fiber_100g': return '#20B2AA';     // LightSeaGreen (Verde acqua)
-      case 'proteins_100g': return '#CD5C5C';   // IndianRed (Rosso mattone chiaro)
-      case 'salt_100g': return '#D3D3D3';      // LightGray (Grigio chiaro)
-      default: return BORDER_COLOR; // Nero come fallback
+      case 'energy_kcal_100g': return '#FFA07A';
+      case 'fat_100g': return '#87CEEB';
+      case 'saturated_fat_100g': return '#DA70D6';
+      case 'carbohydrates_100g': return '#FFD700';
+      case 'sugars_100g': return '#FFB6C1';
+      case 'fiber_100g': return '#20B2AA';
+      case 'proteins_100g': return '#CD5C5C';
+      case 'salt_100g': return '#D3D3D3';
+      default: return BORDER_COLOR;
     }
   };
 
   const toggleItemExpansion = (key: string) => {
-      // Attiva animazione (opzionale)
-      // LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-      setExpandedItems(prev => ({
-          ...prev,
-          [key]: !prev[key]
-      }));
+    setExpandedItems(prev => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
   };
 
-  // Funzione helper per accedere ai valori nutrizionali in modo sicuro
   const getNutrimentValue = (field: keyof ProductRecord | keyof NonNullable<RawProductData['nutriments']>): number | undefined => {
     if (!displayProductInfo) return undefined;
 
@@ -358,14 +355,32 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
   };
 
   const loadProductData = useCallback(async (mountedRef: { current: boolean }) => {
-    // Caso speciale per l'analisi foto: se abbiamo un ID temporaneo ma isPhotoAnalysis=true e abbiamo i dati iniziali, 
-    // non mostriamo l'errore e continuiamo normalmente
+    const loadStartTime = Date.now();
+    
+    // Caso speciale per l'analisi foto
     const isPhotoAnalysisWithTempId = productRecordId === "temp_visual_scan" && isPhotoAnalysis && routeInitialProductData;
     
-    logCalories(`loadProductData iniziato, productRecordId=${productRecordId}, isPhotoAnalysis=${isPhotoAnalysis}, isUpdate=${isUpdate}`);
+    logCalories(`loadProductData ottimizzato iniziato, productRecordId=${productRecordId}, isPhotoAnalysis=${isPhotoAnalysis}, isUpdate=${isUpdate}`);
+    
+    // Verifica cache per dati esistenti
+    const cacheKey = `product-${productRecordId}-${user?.id}`;
+    const cachedProduct = getCachedData(cacheKey);
+    
+    if (cachedProduct && !isUpdate && mountedRef.current) {
+      console.log(`[CACHE] Utilizzando dati prodotto dalla cache per ${productRecordId}`);
+      setDisplayProductInfo(cachedProduct.displayData);
+      setAiAnalysis(cachedProduct.aiData);
+      setLoadingInitialData(false);
+      
+             // Continua con il caricamento degli ingredienti se necessario
+       if (cachedProduct.needsIngredients && user?.id) {
+         // Carica ingredienti in background
+         loadIngredientsInBackground(productRecordId, user.id, cachedProduct.aiData);
+       }
+      return;
+    }
     
     // Reset COMPLETO dello stato SOLO se NON è un aggiornamento
-    // Per gli aggiornamenti, manteniamo lo stato esistente e aggiorniamo solo quello che serve
     if (mountedRef.current && !isUpdate) {
       setDisplayProductInfo(null);
       setAiAnalysis(null);
@@ -377,13 +392,11 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       logCalories('Reset completo dello stato effettuato (NON è un aggiornamento)');
     } else if (isUpdate) {
       logCalories('Aggiornamento in corso - mantenendo stato esistente');
-      // Per gli aggiornamenti, impostiamo loading solo se necessario
       if (mountedRef.current && !displayProductInfo) {
         setLoadingInitialData(true);
       }
     }
     
-    // Modifica della condizione per considerare valido anche il caso dell'analisi foto temporanea
     if ((!user || (!productRecordId && !isPhotoAnalysisWithTempId))) {
       if (mountedRef.current) {
         setError("Informazioni utente o ID prodotto mancanti.");
@@ -395,50 +408,61 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     try {
       let fetchedProduct: ProductRecord | null = null;
       let initialDisplayData: RawProductData | ProductRecord | null = null;
-      let initialAiAnalysis: GeminiAnalysisResult | null = null; // Variabile locale per l'AI iniziale
+      let initialAiAnalysis: GeminiAnalysisResult | null = null;
 
+      // OTTIMIZZAZIONE: Gestisci i dati dalla route in modo più efficiente
       if (routeInitialProductData && mountedRef.current) {
         initialDisplayData = routeInitialProductData;
         setDisplayProductInfo(initialDisplayData); 
+        
         if (routeAiAnalysisResult) {
           logCalories("Dati RAW e Analisi AI dalla route.");
-          logCalories("routeAiAnalysisResult:", routeAiAnalysisResult);
           
-          // Assicurati di copiare ESPLICITAMENTE tutte le proprietà, inclusa calories_estimate
+          // Ottimizzazione: parsing parallelo dei campi JSON
+          const [pros, cons, sustainabilityPros, sustainabilityCons] = await Promise.all([
+            Promise.resolve(parseJsonArrayField(routeAiAnalysisResult.pros)),
+            Promise.resolve(parseJsonArrayField(routeAiAnalysisResult.cons)),
+            Promise.resolve(parseJsonArrayField(routeAiAnalysisResult.sustainabilityPros)),
+            Promise.resolve(parseJsonArrayField(routeAiAnalysisResult.sustainabilityCons))
+          ]);
+          
           initialAiAnalysis = { 
             ...routeAiAnalysisResult,
-            pros: parseJsonArrayField(routeAiAnalysisResult.pros),
-            cons: parseJsonArrayField(routeAiAnalysisResult.cons),
-            sustainabilityPros: parseJsonArrayField(routeAiAnalysisResult.sustainabilityPros),
-            sustainabilityCons: parseJsonArrayField(routeAiAnalysisResult.sustainabilityCons),
-            // Assicurati che calories_estimate sia incluso esplicitamente
+            pros,
+            cons,
+            sustainabilityPros,
+            sustainabilityCons,
             calories_estimate: routeAiAnalysisResult.calories_estimate,
             calorie_estimation_type: routeAiAnalysisResult.calorie_estimation_type,
             ingredients_breakdown: routeAiAnalysisResult.ingredients_breakdown
           };
           
           logCalories('initialAiAnalysis creato:', initialAiAnalysis);
-          
           setAiAnalysis(initialAiAnalysis);
         } else {
           logCalories("Dati RAW dalla route, NESSUNA AI disponibile.");
-          setAiAnalysis(null); // AI non presente dalla route
+          setAiAnalysis(null);
         }
       } else {
-        logCalories(`Nessun dato dalla route. Caricamento ProductRecord completo per ID: ${productRecordId}.`);
+        logCalories(`Caricamento ProductRecord ottimizzato per ID: ${productRecordId}.`);
+        
+        // OTTIMIZZAZIONE: Carica solo i campi necessari inizialmente
         fetchedProduct = await getProductRecordById(productRecordId);
+        
         if (mountedRef.current) {
           if (fetchedProduct) {
             initialDisplayData = fetchedProduct;
             setDisplayProductInfo(fetchedProduct);
             logCalories('Dati prodotto caricati dal DB:', fetchedProduct);
             
-            // Se il fetchedProduct ha calories_estimate, O un health_score valido,
-            // allora consideriamo che abbia dati AI da popolare.
-            if (fetchedProduct.calories_estimate || (fetchedProduct.health_score !== undefined && fetchedProduct.health_score !== null)) {
-              logCalories(`Dati AI (o stima calorie) trovati in fetchedProduct: ${productRecordId}.`);
+            // OTTIMIZZAZIONE: Verifica AI in modo più efficiente
+            const hasAiData = fetchedProduct.calories_estimate || 
+                             (fetchedProduct.health_score !== undefined && fetchedProduct.health_score !== null);
+            
+            if (hasAiData) {
+              logCalories(`Dati AI trovati in fetchedProduct: ${productRecordId}.`);
               
-              // Aggiunta: Parse ingredients_breakdown dal DB se presente
+              // OTTIMIZZAZIONE: Parse ingredients_breakdown in modo asincrono
               let parsedIngredientsBreakdown: EstimatedIngredient[] | undefined = undefined;
               
               if ((fetchedProduct as any).ingredients_breakdown) {
@@ -454,31 +478,29 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                 }
               }
               
+              // OTTIMIZZAZIONE: Parsing parallelo dei campi JSON
+              const [pros, cons, sustainabilityPros, sustainabilityCons] = await Promise.all([
+                Promise.resolve(parseJsonArrayField(fetchedProduct.health_pros)),
+                Promise.resolve(parseJsonArrayField(fetchedProduct.health_cons)),
+                Promise.resolve(parseJsonArrayField(fetchedProduct.sustainability_pros)),
+                Promise.resolve(parseJsonArrayField(fetchedProduct.sustainability_cons))
+              ]);
+              
               initialAiAnalysis = {
                 healthScore: fetchedProduct.health_score ?? 0, 
                 sustainabilityScore: fetchedProduct.sustainability_score ?? 0,
                 analysis: fetchedProduct.health_analysis ?? '',
-                pros: parseJsonArrayField(fetchedProduct.health_pros),
-                cons: parseJsonArrayField(fetchedProduct.health_cons),
-
-      
-                sustainabilityPros: parseJsonArrayField(fetchedProduct.sustainability_pros),
-                sustainabilityCons: parseJsonArrayField(fetchedProduct.sustainability_cons),
-
-        
-                nutriScoreExplanation: fetchedProduct.nutri_score_explanation,
-                novaExplanation: fetchedProduct.nova_explanation,
-                ecoScoreExplanation: fetchedProduct.eco_score_explanation,
+                pros,
+                cons,
+                sustainabilityPros,
+                sustainabilityCons,
+                        // RIMOSSO: nutriScoreExplanation, novaExplanation, ecoScoreExplanation
                 calories_estimate: fetchedProduct.calories_estimate, 
-                // Aggiungiamo i campi per analisi calorie in foto
                 calorie_estimation_type: (fetchedProduct as any).calorie_estimation_type || 
-                  // Fallback: se è un prodotto da analisi visiva e non ha type, assumiamo 'breakdown'
                   (fetchedProduct.is_visually_analyzed ? 'breakdown' : undefined),
                 ingredients_breakdown: parsedIngredientsBreakdown,
-                // Aggiungiamo anche i campi specifici dell'analisi visiva se esistono nel record del DB
                 productNameFromVision: (fetchedProduct as any).product_name_from_vision, 
                 brandFromVision: (fetchedProduct as any).brand_from_vision,
-                // AGGIUNTO: Includi i valori nutrizionali stimati dall'AI dal database
                 estimated_energy_kcal_100g: (fetchedProduct as any).estimated_energy_kcal_100g,
                 estimated_proteins_100g: (fetchedProduct as any).estimated_proteins_100g,
                 estimated_carbs_100g: (fetchedProduct as any).estimated_carbs_100g,
@@ -486,28 +508,29 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               };
               
               logCalories('initialAiAnalysis creato da DB:', initialAiAnalysis);
-              
               setAiAnalysis(initialAiAnalysis);
               
-              // Inizializza l'editor degli ingredienti se abbiamo ingredients_breakdown
+              // OTTIMIZZAZIONE: Inizializza ingredienti solo se necessario
               if (initialAiAnalysis.calorie_estimation_type === 'breakdown' && 
                   initialAiAnalysis.ingredients_breakdown && 
                   initialAiAnalysis.ingredients_breakdown.length > 0) {
-                setEditableIngredients(initialAiAnalysis.ingredients_breakdown);
                 
-                // Calcola il totale
-                const totalCal = initialAiAnalysis.ingredients_breakdown.reduce(
-                  (acc, ing) => acc + ing.estimated_calories_kcal, 0
-                );
+                // Esegui calcoli in parallelo
+                const [totalCal, ingredientsCopy] = await Promise.all([
+                  Promise.resolve(initialAiAnalysis.ingredients_breakdown.reduce(
+                    (acc, ing) => acc + ing.estimated_calories_kcal, 0
+                  )),
+                  Promise.resolve(initialAiAnalysis.ingredients_breakdown.map(ing => ({...ing})))
+                ]);
+                
+                setEditableIngredients(initialAiAnalysis.ingredients_breakdown);
                 setTotalEstimatedCalories(totalCal);
-                originalIngredientsBreakdownRef.current = initialAiAnalysis.ingredients_breakdown.map(
-                  ing => ({...ing})
-                );
+                originalIngredientsBreakdownRef.current = ingredientsCopy;
                 logCalories('Inizializzati ingredienti modificabili dal DB: ', initialAiAnalysis.ingredients_breakdown);
               }
             } else {
               logCalories(`Nessuna AI/stima calorie preesistente in fetchedProduct: ${productRecordId}.`);
-              setAiAnalysis(null); // Nessuna AI preesistente completa
+              setAiAnalysis(null);
             }
           } else {
             setError("Prodotto non trovato nel database.");
@@ -515,59 +538,33 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         }
       }
 
-      // NUOVO CODICE: Caricamento ingredienti personalizzati
-      // Usa la funzione isProductFromPhotoAnalysis per determinare se il prodotto è da analisi visiva
-      // Questa è più robusta perché verifica molteplici criteri
-      const isVisuallyAnalyzed = 
-        // Vecchio criterio basato sul flag nel DB
-        (fetchedProduct && ((fetchedProduct as any).is_visually_analyzed === true)) ||
-        // Nuovo criterio usando la funzione completa
-        isProductFromPhotoAnalysis(isPhotoAnalysis, fetchedProduct, initialAiAnalysis);
+      // OTTIMIZZAZIONE: Cache dei dati caricati
+      const needsIngredients = isProductFromPhotoAnalysis(isPhotoAnalysis, fetchedProduct, initialAiAnalysis) &&
+                              productRecordId !== "temp_visual_scan" && 
+                              !productRecordId.startsWith('photo_analysis_');
       
-      logCalories(`Verifica prodotto visivo: isVisuallyAnalyzed=${isVisuallyAnalyzed}, flag in DB=${fetchedProduct?.is_visually_analyzed}, prod=${fetchedProduct?.product_name}`);
+      setCachedData(cacheKey, {
+        displayData: initialDisplayData,
+        aiData: initialAiAnalysis,
+        needsIngredients
+      });
 
-      if (user && isVisuallyAnalyzed && productRecordId !== "temp_visual_scan") {
-        try {
-          const savedIngredients = await loadPhotoAnalysisIngredients(productRecordId, user.id);
-          if (savedIngredients && savedIngredients.length > 0) {
-            logCalories('Ingredienti personalizzati caricati dal DB:', savedIngredients);
-            setEditableIngredients(savedIngredients);
-            // Calcola il totale delle calorie
-            const totalCal = savedIngredients.reduce((acc, ing) => acc + ing.estimated_calories_kcal, 0);
-            setTotalEstimatedCalories(totalCal);
-            // Salva una copia per il ricalcolo proporzionale
-            originalIngredientsBreakdownRef.current = savedIngredients.map(ing => ({...ing}));
-            // Se abbiamo già caricato i dati personalizzati, non ci sono modifiche non salvate
-            setHasUnsavedChanges(false);
-            
-            // MODIFICA: Se abbiamo trovato ingredienti personalizzati, dobbiamo anche assicurarci 
-            // che aiAnalysis sia aggiornato con il tipo di stima "breakdown" e gli ingredienti
-            if (initialAiAnalysis) {
-              logCalories('Aggiornamento di aiAnalysis con ingredienti personalizzati e calorie_estimation_type=breakdown');
-              initialAiAnalysis = {
-                ...initialAiAnalysis,
-                calorie_estimation_type: 'breakdown',
-                ingredients_breakdown: savedIngredients,
-                calories_estimate: `Calorie stimate: ${totalCal} kcal`
-              };
-              setAiAnalysis(initialAiAnalysis);
-            }
-          }
-        } catch (error) {
-          console.error('Errore nel caricamento degli ingredienti personalizzati:', error);
-        }
+      // OTTIMIZZAZIONE: Carica ingredienti personalizzati in background
+      if (user && needsIngredients) {
+        loadIngredientsInBackground(productRecordId, user.id, initialAiAnalysis);
       }
 
       if (mountedRef.current) {
         setLoadingInitialData(false); 
       }
 
-      if (user && productRecordId && mountedRef.current) {
-        const favoriteStatus = await isProductInFavorites(user.id, productRecordId);
-        if (mountedRef.current) {
-          setIsFavorite(favoriteStatus);
-        }
+      // OTTIMIZZAZIONE: Carica stato preferiti in background
+      if (user && productRecordId && mountedRef.current && !productRecordId.startsWith('photo_analysis_')) {
+        loadFavoriteStatusInBackground(user.id, productRecordId);
       }
+
+      const loadTime = Date.now() - loadStartTime;
+      console.log(`[PERFORMANCE] loadProductData completato in ${loadTime}ms`);
 
     } catch (err) {
       console.error("[DETAIL ERROR] Errore nel caricamento dei dati del prodotto:", err);
@@ -581,9 +578,58 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       productRecordId, 
       routeInitialProductData, 
       routeAiAnalysisResult,
-      isPhotoAnalysis, // Dipendenza esplicita
-      isUpdate, // Nuova dipendenza per gestire gli aggiornamenti
+      isPhotoAnalysis,
+      isUpdate,
+      getCachedData,
+      setCachedData
   ]);
+
+  // OTTIMIZZAZIONE: Funzione per caricare ingredienti in background
+  const loadIngredientsInBackground = useCallback(async (
+    productId: string, 
+    userId: string, 
+    aiAnalysis: GeminiAnalysisResult | null
+  ) => {
+    try {
+      const savedIngredients = await loadPhotoAnalysisIngredients(productId, userId);
+      if (savedIngredients && savedIngredients.length > 0) {
+        logCalories('Ingredienti personalizzati caricati in background:', savedIngredients);
+        
+        const [totalCal, ingredientsCopy] = await Promise.all([
+          Promise.resolve(savedIngredients.reduce((acc, ing) => acc + ing.estimated_calories_kcal, 0)),
+          Promise.resolve(savedIngredients.map(ing => ({...ing})))
+        ]);
+        
+        setEditableIngredients(savedIngredients);
+        setTotalEstimatedCalories(totalCal);
+        originalIngredientsBreakdownRef.current = ingredientsCopy;
+        setHasUnsavedChanges(false);
+        
+        // Aggiorna aiAnalysis se necessario
+        if (aiAnalysis) {
+          const updatedAiAnalysis = {
+            ...aiAnalysis,
+            calorie_estimation_type: 'breakdown' as const,
+            ingredients_breakdown: savedIngredients,
+            calories_estimate: `Calorie stimate: ${totalCal} kcal`
+          };
+          setAiAnalysis(updatedAiAnalysis);
+        }
+      }
+    } catch (error) {
+      console.error('Errore nel caricamento degli ingredienti personalizzati in background:', error);
+    }
+  }, []);
+
+  // OTTIMIZZAZIONE: Funzione per caricare stato preferiti in background
+  const loadFavoriteStatusInBackground = useCallback(async (userId: string, productId: string) => {
+    try {
+      const favoriteStatus = await isProductInFavorites(userId, productId);
+      setIsFavorite(favoriteStatus);
+    } catch (error) {
+      console.error('Errore nel caricamento dello stato preferiti:', error);
+    }
+  }, []);
 
   // useEffect esistente per caricare i dati
   useEffect(() => {
@@ -602,23 +648,37 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       return;
     }
     
-    // Determina se mostrare il loading per barcode O per analisi foto
-    const shouldShowLoadingForBarcode = isProductFromBarcodeScan && isAiLoading && !aiAnalysis;
+    // OTTIMIZZAZIONE: Determina se mostrare il loading per analisi foto
     const shouldShowLoadingForPhoto = isPhotoAnalysis && (
-      (productRecordId === "temp_visual_scan" && !aiAnalysis) || // Caso: navigazione immediata senza dati AI
-      (isAiLoading && !aiAnalysis) // Caso: analisi AI in corso
+      (productRecordId.startsWith('photo_analysis_') && !aiAnalysis) || // Caso: ID dinamico analisi foto
+      (isPhotoAnalyzing && !aiAnalysis) || // Caso: context indica analisi in corso
+      (currentAnalysis && !currentAnalysis.isComplete && !aiAnalysis) // Caso: analisi non completata via context
     );
     
+    // Per barcode, mantieni la logica originale ma semplificata
+    const shouldShowLoadingForBarcode = !isPhotoAnalysis && isProductFromBarcodeScan && isAiLoading && !aiAnalysis;
+    
     if (shouldShowLoadingForBarcode || shouldShowLoadingForPhoto) {
+      console.log('[LOADING DEBUG] Mostrando loading animation:', {
+        shouldShowLoadingForBarcode,
+        shouldShowLoadingForPhoto,
+        isPhotoAnalysis,
+        productRecordId,
+        isPhotoAnalyzing,
+        aiAnalysis: !!aiAnalysis,
+        currentAnalysis: !!currentAnalysis
+      });
+      
       setShowLoadingAnimation(true);
       
-      // Messaggi specifici per tipo di analisi
+      // Messaggi ottimizzati per velocità percepita
       const photoLoadingMessages = [
         "Analisi immagine in corso...",
         "Riconoscimento prodotto...", 
-        "Calcolo valori nutrizionali...",
-        "Analisi salutare dell'alimento...",
-        "Generazione raccomandazioni..."
+        "Analisi valori nutrizionali...",
+        "Calcolo punteggio salute...",
+        "Generazione raccomandazioni...",
+        "Finalizzazione risultati..."
       ];
       
       const messages = shouldShowLoadingForPhoto ? photoLoadingMessages : loadingMessages;
@@ -631,15 +691,24 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
           setCurrentLoadingMessage(messages[nextIndex]);
           return nextIndex;
         });
-      }, 2000); // Cambia messaggio ogni 2 secondi
+      }, 1500); // Cambia messaggio ogni 1.5 secondi (più veloce)
     } else {
+      console.log('[LOADING DEBUG] NON mostrando loading animation:', {
+        shouldShowLoadingForBarcode,
+        shouldShowLoadingForPhoto,
+        isPhotoAnalysis,
+        productRecordId,
+        isPhotoAnalyzing,
+        aiAnalysis: !!aiAnalysis,
+        currentAnalysis: !!currentAnalysis
+      });
       setShowLoadingAnimation(false);
     }
     
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isProductFromBarcodeScan, isPhotoAnalysis, productRecordId, isAiLoading, aiAnalysis, showLoadingAnimation]);
+  }, [isProductFromBarcodeScan, isPhotoAnalysis, productRecordId, isAiLoading, aiAnalysis, showLoadingAnimation, isPhotoAnalyzing, currentAnalysis]);
 
   // Log di aiAnalysis quando cambia
   useEffect(() => {
@@ -690,11 +759,8 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               analysis: displayProductInfo.health_analysis ?? '',
               pros: [],
               cons: [],
-
-  
               sustainabilityPros: [],
               sustainabilityCons: [],
-
               calories_estimate: displayProductInfo.calories_estimate,
               // Aggiungiamo il tipo come breakdown per la frutta e verdura singola
               calorie_estimation_type: 'breakdown'
@@ -736,12 +802,25 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
           }
       }
 
+      // CORREZIONE: Controlla se l'analisi AI è già completa
+      const hasCompleteAiAnalysis = aiAnalysis && 
+        (aiAnalysis.healthScore !== undefined && aiAnalysis.healthScore !== null && aiAnalysis.healthScore > 0) &&
+        aiAnalysis.analysis && aiAnalysis.analysis.trim() !== "";
+
       // Condizione per eseguire l'analisi AI testuale/barcode
-      const needsAiFetch = displayProductInfo && (!aiAnalysis || aiAnalysis.healthScore === undefined || aiAnalysis.healthScore === null);
+      const needsAiFetch = displayProductInfo && !hasCompleteAiAnalysis;
       
-      if (user && productRecordId && needsAiFetch && hasValidBarcodeForTextAnalysis) {
+      // Forza l'analisi AI solo se shouldStartAiAnalysis è true E non c'è già un'analisi completa
+      const shouldForceAiAnalysis = shouldStartAiAnalysis && displayProductInfo && hasValidBarcodeForTextAnalysis && !hasCompleteAiAnalysis;
         
-        logCalories("Condizioni per fetch/generate AI (barcode/text) soddisfatte.");
+      if (user && productRecordId && (needsAiFetch || shouldForceAiAnalysis) && hasValidBarcodeForTextAnalysis) {
+        
+        if (shouldForceAiAnalysis) {
+          logCalories("Analisi AI forzata tramite shouldStartAiAnalysis flag.");
+        } else {
+          logCalories("Condizioni per fetch/generate AI (barcode/text) soddisfatte.");
+        }
+        
         if (mountedRef.current) {
           setIsAiLoading(true);
         }
@@ -751,7 +830,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         if (routeInitialProductData && routeInitialProductData.code) {
           logCalories("Uso routeInitialProductData per Gemini.");
           dataForGeminiAnalysis = routeInitialProductData;
-        } else if (displayProductInfo && 'nutriments' in displayProductInfo && (displayProductInfo as any).code) { // È RawProductData
+        } else if (displayProductInfo && (displayProductInfo as RawProductData).code) { // È RawProductData
           logCalories("Uso displayProductInfo (RawProductData) per Gemini.");
           dataForGeminiAnalysis = displayProductInfo as RawProductData;
         } else if (displayProductInfo && (displayProductInfo as ProductRecord).barcode) { // È ProductRecord
@@ -766,8 +845,8 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
             nutrition_grades: record.nutrition_grade,
             // ... (altri campi da ProductRecord a RawProductData come prima)
             nutriments: {
-                  energy_kcal_100g: record.energy_kcal_100g, 
-                  energy_100g: record.energy_100g,
+              energy_kcal_100g: record.energy_kcal_100g, 
+              energy_100g: record.energy_100g,
               fat_100g: record.fat_100g,
               saturated_fat_100g: record.saturated_fat_100g,
               carbohydrates_100g: record.carbohydrates_100g,
@@ -824,6 +903,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         else if (!productRecordId) logCalories("Skip fetchOrGenerate (no productRecordId).");
         else if (!displayProductInfo) logCalories("Skip fetchOrGenerate (no displayProductInfo).");
         else if (!hasValidBarcodeForTextAnalysis) logCalories("Skip fetchOrGenerate (no valid barcode for text analysis).");
+        else if (hasCompleteAiAnalysis) logCalories("Skip fetchOrGenerate (analisi AI già completa).");
         else if (!needsAiFetch) logCalories("Skip fetchOrGenerate (AI già presente e completa, o dati della route hanno AI).");
       }
     };
@@ -844,6 +924,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     routeInitialProductData, 
     isAiLoading, 
     isPhotoAnalysis, // Aggiunta dipendenza
+    shouldStartAiAnalysis, // Aggiunta dipendenza per avvio forzato AI
   ]);
 
   // useEffect che monitora aiAnalysis e inizializza/aggiorna gli ingredienti modificabili se necessario
@@ -954,8 +1035,66 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     }
   }, [aiAnalysis, editableIngredients, displayProductInfo]);
 
+  // useEffect per ascoltare gli aggiornamenti dall'analisi foto via context
+  useEffect(() => {
+    if (!currentAnalysis) return;
+    
+    // Controlla se l'aggiornamento è per il prodotto corrente
+    if (currentAnalysis.productRecordId === productRecordId || 
+        (productRecordId.startsWith('photo_analysis_') && currentAnalysis.productRecordId.startsWith('photo_analysis_'))) {
+      
+      console.log('[PHOTO CONTEXT] Aggiornamento ricevuto per prodotto:', currentAnalysis.productRecordId);
+      
+      // Aggiorna i dati del prodotto se disponibili
+      if (currentAnalysis.productData) {
+        console.log('[PHOTO CONTEXT] Aggiornamento displayProductInfo');
+        setDisplayProductInfo(currentAnalysis.productData);
+      }
+      
+      // Aggiorna l'analisi AI se disponibile
+      if (currentAnalysis.aiAnalysisResult) {
+        console.log('[PHOTO CONTEXT] Aggiornamento aiAnalysis');
+        setAiAnalysis(currentAnalysis.aiAnalysisResult);
+      }
+      
+      // Se l'analisi è completa, aggiorna anche l'ID del prodotto
+      if (currentAnalysis.isComplete && currentAnalysis.productRecordId !== productRecordId) {
+        console.log('[PHOTO CONTEXT] Analisi completa, aggiorno productRecordId');
+        // Aggiorna i parametri della route per riflettere l'ID finale
+        navigation.setParams({
+          productRecordId: currentAnalysis.productRecordId,
+          initialProductData: currentAnalysis.productData,
+          aiAnalysisResult: currentAnalysis.aiAnalysisResult,
+          isPhotoAnalysis: true
+        });
+      }
+    }
+  }, [currentAnalysis, productRecordId, navigation]);
+
+  // Cleanup del context quando si esce dalla schermata
+  useEffect(() => {
+    return () => {
+      if (isPhotoAnalysis) {
+        clearAnalysis();
+      }
+    };
+  }, [isPhotoAnalysis, clearAnalysis]);
+
+  // Cleanup dei timeout quando il componente si smonta
+  useEffect(() => {
+    return () => {
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+      }
+      
+      // Pulisci tutti i timeout delle API calls
+      debouncedApiCalls.forEach(timeout => clearTimeout(timeout));
+      debouncedApiCalls.clear();
+    };
+  }, []);
+
   const handleToggleFavorite = async () => {
-    if (!displayProductInfo || !user || !productRecordId) return;
+    if (!displayProductInfo || !user || !productRecordId || productRecordId.startsWith('photo_analysis_')) return;
 
     setSavingFavorite(true)
     try {
@@ -1012,33 +1151,122 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     }
   }
 
-  const getScoreColorForIcon = (grade: string | undefined | null, type: 'nutri' | 'eco', numericScore?: number | undefined | null): string => {
-    // Priorità al grade letterale se disponibile e valido
-    if (grade && typeof grade === 'string' && grade.toLowerCase() !== 'unknown') {
-      if (type === 'nutri') {
-        switch (grade.toLowerCase()) {
-            case "a+": return "#6ECFF6"; 
-            case "a": return "#1E8F4E";
-            case "b": return "#7AC547";
-            case "c": return "#FFC734"; 
-            case "d": return "#FF9900"; 
-            case "e": return "#FF0000"; 
-            default: break; // Continua sotto se non matcha
-        }
-      } else { // eco
-        switch (grade.toLowerCase()) {
-            case "a": return "#10703E"; 
-            case "b": return "#60B347"; 
-            case "c": return "#FFC734"; 
-            case "d": return "#DC7633"; 
-            case "e": return "#BA4A00"; 
-            default: break; // Continua sotto se non matcha
-        }
+  // Funzioni per il tracking calorie
+  const determineEntryType = (): 'barcode' | 'photo_packaged' | 'photo_meal' => {
+    if (!displayProductInfo) return 'barcode';
+    
+    // Prima controlla se è un prodotto da analisi foto
+    const isFromPhotoAnalysis = isProductFromPhotoAnalysis(isPhotoAnalysis, displayProductInfo, aiAnalysis);
+    
+    if (isFromPhotoAnalysis) {
+      // Controlla se è un pasto con breakdown di ingredienti
+      const hasBreakdown = 
+        ('calorie_estimation_type' in displayProductInfo && displayProductInfo.calorie_estimation_type === 'breakdown') ||
+        ('ingredients_breakdown' in displayProductInfo && displayProductInfo.ingredients_breakdown) ||
+        (aiAnalysis?.ingredients_breakdown && aiAnalysis.ingredients_breakdown.length > 0) ||
+        editableIngredients && editableIngredients.length > 0;
+      
+      if (hasBreakdown) {
+        console.log('[TRACKING] Identificato come photo_meal (pasto fotografato con breakdown)');
+        return 'photo_meal'; // Pasto completo fotografato con ingredienti
+      } else {
+        console.log('[TRACKING] Identificato come photo_packaged (prodotto confezionato fotografato)');
+        return 'photo_packaged'; // Prodotto confezionato fotografato
       }
     }
-    // Se il grade non è valido o non c'è, usa il punteggio numerico
-    return getColorFromNumericScore(numericScore, colors);
+    
+    console.log('[TRACKING] Identificato come barcode (prodotto da barcode)');
+    return 'barcode'; // Prodotto da barcode
   };
+
+  const handleAddToTracking = () => {
+    if (!displayProductInfo || productRecordId.startsWith('photo_analysis_')) return;
+    
+    const entryType = determineEntryType();
+    console.log('[TRACKING] Entry type determinato:', entryType);
+    
+    if (entryType === 'photo_meal') {
+      console.log('[TRACKING] Pasto fotografato - aggiunta diretta');
+      // Per i pasti fotografati, aggiungi direttamente
+      addToTrackingDirect();
+    } else {
+      console.log('[TRACKING] Prodotto confezionato - richiesta quantità');
+      // Per prodotti confezionati, chiedi la quantità
+      setShowQuantityModal(true);
+    }
+  };
+
+  const addToTrackingDirect = async () => {
+    if (!displayProductInfo) return;
+    
+    try {
+      setAddingToTracking(true);
+      
+      const today = new Date().toISOString().split('T')[0];
+      const entryType = determineEntryType();
+      
+      await addProductToDay(
+        today,
+        productRecordId,
+        entryType,
+        undefined, // Nessuna quantità per i pasti fotografati
+        entryType === 'photo_meal' ? (
+          ('calories_estimate' in displayProductInfo && displayProductInfo.calories_estimate) || 
+          aiAnalysis?.calories_estimate || 
+          'Pasto fotografato'
+        ) : undefined
+      );
+
+      Alert.alert(
+        'Aggiunto al Tracking!',
+        `${displayProductInfo.product_name} è stato aggiunto al tuo diario di oggi`,
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('Errore aggiunta al tracking:', error);
+      Alert.alert('Errore', 'Impossibile aggiungere il prodotto al tracking calorie');
+    } finally {
+      setAddingToTracking(false);
+    }
+  };
+
+  const handleQuantityConfirm = async () => {
+    if (!displayProductInfo) return;
+    
+    const quantityNum = parseFloat(quantity);
+    if (isNaN(quantityNum) || quantityNum <= 0) {
+      Alert.alert('Errore', 'Inserisci una quantità valida');
+      return;
+    }
+
+    try {
+      setAddingToTracking(true);
+      setShowQuantityModal(false);
+      
+      const today = new Date().toISOString().split('T')[0];
+      const entryType = determineEntryType();
+      
+      await addProductToDay(
+        today,
+        productRecordId,
+        entryType,
+        quantityNum
+      );
+
+      Alert.alert(
+        'Aggiunto al Tracking!',
+        `${displayProductInfo.product_name} (${quantityNum}g) è stato aggiunto al tuo diario di oggi`,
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('Errore aggiunta al tracking:', error);
+      Alert.alert('Errore', 'Impossibile aggiungere il prodotto al tracking calorie');
+    } finally {
+      setAddingToTracking(false);
+    }
+  };
+
+  // getScoreColorForIcon rimossa - ora si usa getScoreColor globale direttamente
 
   // Nuova funzione per verificare se ci sono dati nutrizionali reali (non stimati)
   const hasRealNutritionData = (): boolean => {
@@ -1096,7 +1324,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
 
     return (
       <View style={styles.itemListContainer}> 
-        {sectionTitle && <Text style={styles.aiSectionTitleAlt}>{sectionTitle}</Text>} {/* Titolo opzionale per sezione */} 
+        {sectionTitle && <Text style={styles.aiSectionTitleAlt} allowFontScaling={false}>{sectionTitle}</Text>} {/* Titolo opzionale per sezione */} 
         {items.map((itemData, index) => {
           const isScoreItem = typeof itemData === 'object' && itemData !== null && 'classification' in itemData && 'scoreType' in itemData; // Check più robusto per ScoreItem
           const key = isScoreItem ? (itemData as ScoreItem).id : `${category}-item-${index}`;
@@ -1143,7 +1371,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                 >
                   <View style={styles.itemCardHeader}>
                     <Ionicons name={iconInfo.name as any} size={22} color={iconInfo.color} style={styles.aiItemIcon} />
-                    <Text style={styles.itemCardTitleText}>{itemTitle}</Text>
+                    <Text style={styles.itemCardTitleText} allowFontScaling={false}>{itemTitle}</Text>
                   </View>
                   <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={24} color={BORDER_COLOR} style={styles.aiListChevron} />
                 </TouchableOpacity>
@@ -1165,11 +1393,11 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                       // Il testo dell'AI ora segue direttamente.
                     ) : (
                       // --- Rendering espanso per Pro/Con standard --- 
-                      itemDetail ? <Text style={styles.itemDetailText}>{itemDetail}</Text> : null
+                      itemDetail ? <Text style={styles.itemDetailText} allowFontScaling={false}>{itemDetail}</Text> : null
                     )}
                     {/* Testo dell'AI per ScoreItem, ora posizionato DOPO ScoreIndicatorCard */} 
                     {isScoreItem && scoreItemData && (
-                        <Text style={[styles.itemDetailText, { marginTop: 20 }]}> 
+                        <Text style={[styles.itemDetailText, { marginTop: 20 }]} allowFontScaling={false}> 
                             {scoreItemData.aiExplanation || "L'analisi AI specifica per questo punteggio sarà disponibile a breve."}
                         </Text>
                     )}
@@ -1278,13 +1506,13 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       justifyContent: 'center',
     },
     topCardProductName: {
-      fontSize: 19, 
+      fontSize: scaleFont(19), 
       marginBottom: 5,
       color: colors.text, 
       fontFamily: 'BricolageGrotesque-Regular',
     },
     topCardBrandName: {
-      fontSize: 15, 
+      fontSize: scaleFont(15), 
       color: colors.textMuted,
       opacity: 0.8,
       marginBottom: 8,
@@ -1303,12 +1531,12 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       marginRight: 5, 
     },
     scoreValueStyle: {
-      fontSize: 15,
+      fontSize: scaleFont(15),
       color: colors.text, 
       fontFamily: 'BricolageGrotesque-Bold',
     },
     topCardProductSummaryText: {
-      fontSize: 15,
+      fontSize: scaleFont(15),
       lineHeight: 22,
       color: colors.text,
       marginTop: 3,
@@ -1495,13 +1723,15 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       paddingHorizontal: 12,
       paddingBottom: 12,
       paddingTop: 8,
-      overflow: 'hidden', // Aggiungo overflow:hidden per controllare i figli
     },
     itemDetailText: {
       fontSize: 14,
       lineHeight: 20,
       color: colors.textMuted || '#495057',
       fontFamily: 'BricolageGrotesque-Regular',
+      flexWrap: 'wrap',
+      alignSelf: 'stretch',
+      width: '100%',
     },
     scoreRowContainer: { 
         flexDirection: 'row',
@@ -1859,12 +2089,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       position: 'relative',
       zIndex: 1,
     },
-    confirmButton: {
-      backgroundColor: colors.primary,
-    },
-    cancelButton: {
-      backgroundColor: colors.textMuted || '#6c757d',
-    },
+
     addIngredientButtonText: {
       color: '#ffffff',
       fontSize: 15,
@@ -2300,6 +2525,72 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       // width e height verranno impostate inline
     },
 
+    // STILI PER IL LOADING PULITO E MINIMALISTA
+    cleanLoadingContainer: {
+      marginTop: 0, // Ridotto drasticamente da 20 a 8 per avvicinarlo al container sopra
+      marginHorizontal: 0, // Allineato con topCardWrapper e altri elementi
+      marginBottom: 20,
+    },
+    cleanLoadingCard: {
+      backgroundColor: '#FFFFFF',
+      borderRadius: 16,
+      borderWidth: CARD_BORDER_WIDTH,
+      borderColor: BORDER_COLOR,
+      padding: 18, // Ridotto da 24 a 18 per allineamento con topCardContainer
+      alignItems: 'center',
+      shadowColor: BORDER_COLOR,
+      shadowOffset: { width: SHADOW_OFFSET_VALUE, height: SHADOW_OFFSET_VALUE },
+      shadowOpacity: 1,
+      shadowRadius: 0,
+      elevation: 3,
+    },
+    cleanIconContainer: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      backgroundColor: `${colors.primary}15`,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 12, // Ridotto da 16 a 12
+      borderWidth: 1,
+      borderColor: `${colors.primary}30`,
+    },
+    cleanLoadingMessage: {
+      fontSize: 16,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      color: colors.text,
+      textAlign: 'center',
+      marginBottom: 16, // Ridotto da 20 a 16
+      lineHeight: 22,
+    },
+    cleanProgressContainer: {
+      width: '100%',
+      marginBottom: 12, // Ridotto da 16 a 12
+    },
+    cleanProgressBackground: {
+      height: 4,
+      backgroundColor: '#F0F0F0',
+      borderRadius: 2,
+      overflow: 'hidden',
+    },
+    cleanProgressFill: {
+      height: '100%',
+      backgroundColor: colors.primary,
+      borderRadius: 2,
+    },
+    cleanDotsContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    cleanDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: colors.primary,
+      marginHorizontal: 3,
+    },
+
     // NUOVI STILI PER IL DESIGN MODERNO DEI VALORI NUTRIZIONALI
     modernNutritionSection: {
       paddingVertical: 20,
@@ -2337,7 +2628,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       borderWidth: CARD_BORDER_WIDTH,
       borderColor: BORDER_COLOR,
       paddingTop: 24, // Mantengo 24 per il top
-      paddingBottom: 16, // Ridotto da 24 a 16 per bilanciare
+      paddingBottom: 0, // Rimosso padding fisso - verrà gestito dinamicamente
       paddingHorizontal: 20,
       position: 'relative',
       zIndex: 1,
@@ -2363,8 +2654,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       width: 50,
       height: 50,
       borderRadius: 25,
-      borderWidth: 2,
-      borderColor: BORDER_COLOR,
+      borderWidth: 0,
       justifyContent: 'center',
       alignItems: 'center',
       marginBottom: 8,
@@ -2374,8 +2664,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       width: 40,
       height: 40,
       borderRadius: 20,
-      borderWidth: 2,
-      borderColor: BORDER_COLOR,
+      borderWidth: 0,
       justifyContent: 'center',
       alignItems: 'center',
       marginBottom: 6,
@@ -2609,6 +2898,182 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       borderRadius: 2,
       // Il colore viene settato dinamicamente in base al nutriente
     },
+    // Stili per il pulsante tracking calorie
+    trackingButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 14,
+      borderWidth: 2,
+      borderStyle: 'dashed',
+      borderRadius: 12,
+      borderColor: '#00463b',
+      backgroundColor: 'rgba(0, 70, 59, 0.05)',
+      marginVertical: 16,
+      marginHorizontal: 0,
+    },
+    trackingButtonText: {
+      color: '#00463b',
+      fontSize: 16,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      marginLeft: 8,
+    },
+    // Modal Styles
+    modalOverlay: {
+      flex: 1,
+      justifyContent: 'flex-end',
+    },
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+      justifyContent: 'flex-end',
+      paddingHorizontal: 16,
+      paddingBottom: 20,
+    },
+    modalWrapper: {
+      backgroundColor: CARD_BACKGROUND_COLOR,
+      borderRadius: 20,
+      borderWidth: CARD_BORDER_WIDTH,
+      borderColor: BORDER_COLOR,
+      shadowColor: '#000',
+      shadowOffset: {
+        width: 0,
+        height: -2,
+      },
+      shadowOpacity: 0.25,
+      shadowRadius: 10,
+      elevation: 10,
+    },
+    modalContent: {
+      padding: 20,
+      paddingBottom: 24,
+    },
+    modalHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      marginBottom: 16,
+    },
+    modalTitle: {
+      fontSize: 20,
+      fontFamily: 'BricolageGrotesque-Bold',
+      color: BORDER_COLOR,
+    },
+    modalCloseButton: {
+      padding: 4,
+    },
+    modalProductInfo: {
+      marginBottom: 16,
+    },
+    modalProductName: {
+      fontSize: 16,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      color: BORDER_COLOR,
+      marginBottom: 4,
+    },
+    modalProductBrand: {
+      fontSize: 14,
+      fontFamily: 'BricolageGrotesque-Regular',
+      color: '#666666',
+    },
+    quantityInputContainer: {
+      marginBottom: 16,
+    },
+    quantityLabel: {
+      fontSize: 16,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      color: BORDER_COLOR,
+      marginBottom: 8,
+    },
+    quantityInputField: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: '#F8F9FA',
+      borderRadius: 12,
+      borderWidth: 2,
+      borderColor: '#E0E0E0',
+      paddingHorizontal: 16,
+      marginBottom: 4,
+    },
+    quantityModalInput: {
+      flex: 1,
+      fontSize: 18,
+      fontFamily: 'BricolageGrotesque-Regular',
+      paddingVertical: 14,
+      color: BORDER_COLOR,
+    },
+    quantityUnit: {
+      fontSize: 16,
+      fontFamily: 'BricolageGrotesque-Medium',
+      color: '#666666',
+      marginLeft: 8,
+    },
+    modalButtons: {
+      flexDirection: 'row',
+      gap: 12,
+      marginTop: 4,
+    },
+    cancelButton: {
+      flex: 1,
+      paddingVertical: 14,
+      borderRadius: 12,
+      borderWidth: 2,
+      borderColor: '#E0E0E0',
+      backgroundColor: '#F8F9FA',
+      alignItems: 'center',
+    },
+    cancelButtonText: {
+      color: '#666666',
+      fontSize: 16,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+    },
+    confirmButton: {
+      flex: 1,
+      backgroundColor: '#00463b',
+      borderRadius: 12,
+      borderWidth: 2,
+      borderColor: '#00463b',
+      paddingVertical: 14,
+      alignItems: 'center',
+    },
+    confirmButtonDisabled: {
+      opacity: 0.6,
+    },
+    confirmButtonText: {
+      color: '#FFFFFF',
+      fontSize: 16,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+    },
+    // Stili per l'informativa del diario
+    diaryNoticeWrapper: {
+      marginHorizontal: 0,
+      marginTop: -2, // Ridotto - stesso padding tra titolo e container come Punteggio Salute
+      marginBottom: 16, // Padding verso i componenti sotto
+    },
+    diaryNoticeContainer: {
+      backgroundColor: '#FFF8E1',
+      borderRadius: 12,
+      borderWidth: 1.5,
+      borderColor: '#FF9900',
+      padding: 16,
+    },
+    diaryNoticeHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 8,
+    },
+    diaryNoticeTitle: {
+      fontSize: 16,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      color: '#000000',
+      marginLeft: 8,
+    },
+    diaryNoticeText: {
+      fontSize: 14,
+      fontFamily: 'BricolageGrotesque-Regular',
+      color: '#333333',
+      lineHeight: 20,
+    },
   })
 
   // --- LOG CONDIZIONI DI RENDERING --- 
@@ -2626,7 +3091,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       <View style={[styles.container, styles.centered, { backgroundColor: BACKGROUND_COLOR }]}>
         <StatusBar style="dark" backgroundColor={BACKGROUND_COLOR} />
         <ActivityIndicator size="large" color={colors.primary} />
-         <Text style={{ marginTop: 10, color: colors.text, fontFamily: 'BricolageGrotesque-Regular' }}>
+         <Text style={{ marginTop: 10, color: colors.text, fontFamily: 'BricolageGrotesque-Regular' }} allowFontScaling={false}>
            {isAiLoading ? "Analisi AI in corso..." : "Caricamento dati prodotto..."}
          </Text>
       </View>
@@ -2724,7 +3189,6 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
   const healthNeutralItems: ScoreItem[] = [];
   const sustainabilityScoreItems: ScoreItem[] = [];
   const sustainabilityNeutralItems: ScoreItem[] = [];
-  const placeholderExplanation = "L'analisi AI specifica per questo punteggio sarà disponibile a breve.";
 
   // Nutri-Score (Sezione Salute)
   if (nutritionGrade && typeof nutritionGrade === 'string' && nutritionGrade.toLowerCase() !== 'unknown') {
@@ -2732,6 +3196,10 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     const gradeUpper = nutritionGrade.toUpperCase();
     if (['A+', 'A', 'B'].includes(gradeUpper)) classification = 'positive'; // Aggiunto A+
     else if (['D', 'E'].includes(gradeUpper)) classification = 'negative';
+    
+    // Ottieni la descrizione standard per questo Nutri-Score
+    const standardDescription = NUTRI_SCORE_DESCRIPTIONS[gradeUpper];
+    const aiExplanation = standardDescription ? standardDescription.detail : "Descrizione non disponibile per questo punteggio.";
     
     const nutriItem: ScoreItem = {
       id: 'nutri-score',
@@ -2741,7 +3209,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       originalValue: gradeUpper,
       scale: ['A', 'B', 'C', 'D', 'E'], // La scala visualizzata rimane A-E
       valueType: 'letter',
-      aiExplanation: (!isPhotoAnalysis && aiAnalysis?.nutriScoreExplanation) ? aiAnalysis.nutriScoreExplanation : placeholderExplanation, 
+      aiExplanation: aiExplanation,
     };
     if (classification === 'neutral') healthNeutralItems.push(nutriItem);
     else healthScoreItems.push(nutriItem); // Aggiungi a positivi/negativi salute
@@ -2756,6 +3224,10 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         if (novaValueNum <= 2) classification = 'positive';
         else if (novaValueNum === 4) classification = 'negative';
 
+        // Ottieni la descrizione standard per questo NOVA Group
+        const standardDescription = NOVA_DESCRIPTIONS[novaValueStr];
+        const aiExplanation = standardDescription ? standardDescription.detail : "Descrizione non disponibile per questo gruppo NOVA.";
+
         const novaItem: ScoreItem = {
             id: 'nova-group',
             title: `Gruppo NOVA: ${novaValueNum}`,
@@ -2764,7 +3236,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
             originalValue: novaValueNum, // Usiamo il numero
             scale: [1, 2, 3, 4],
             valueType: 'number',
-            aiExplanation: (!isPhotoAnalysis && aiAnalysis?.novaExplanation) ? aiAnalysis.novaExplanation : placeholderExplanation, 
+            aiExplanation: aiExplanation,
         };
         if (classification === 'neutral') healthNeutralItems.push(novaItem);
         else healthScoreItems.push(novaItem); // Aggiungi a positivi/negativi salute
@@ -2778,6 +3250,10 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     if (['A+', 'A', 'B'].includes(gradeUpper)) classification = 'positive'; // Aggiunto A+
     else if (['D', 'E'].includes(gradeUpper)) classification = 'negative';
 
+    // Ottieni la descrizione standard per questo Eco-Score
+    const standardDescription = ECO_SCORE_DESCRIPTIONS[gradeUpper];
+    const aiExplanation = standardDescription ? standardDescription.detail : "Descrizione non disponibile per questo punteggio ambientale.";
+
     const ecoItem: ScoreItem = {
         id: 'eco-score',
         title: `Eco-Score: ${gradeUpper}`,
@@ -2786,7 +3262,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         originalValue: gradeUpper,
         scale: ['A', 'B', 'C', 'D', 'E'], // La scala visualizzata rimane A-E
         valueType: 'letter',
-        aiExplanation: (!isPhotoAnalysis && aiAnalysis?.ecoScoreExplanation) ? aiAnalysis.ecoScoreExplanation : placeholderExplanation, 
+        aiExplanation: aiExplanation,
     };
      if (classification === 'neutral') sustainabilityNeutralItems.push(ecoItem);
     else sustainabilityScoreItems.push(ecoItem); // Aggiungi a positivi/negativi eco
@@ -2925,7 +3401,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                         >
                         <View style={styles.itemCardHeader}> 
                             <Ionicons name={iconInfo.name as any} size={22} color={iconInfo.color} style={styles.aiItemIcon} />
-                            <Text style={styles.itemCardTitleText}>{itemTitle}</Text>
+                            <Text style={styles.itemCardTitleText} allowFontScaling={false}>{itemTitle}</Text>
                         </View>
                         <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={24} color={BORDER_COLOR} style={styles.aiListChevron} />
                         </TouchableOpacity>
@@ -2943,10 +3419,10 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                                 borderless={true} // Attivo la modalità senza bordi
                             />
                             ) : (
-                            itemDetail ? <Text style={styles.itemDetailText}>{itemDetail}</Text> : null
+                            itemDetail ? <Text style={styles.itemDetailText} allowFontScaling={false}>{itemDetail}</Text> : null
                             )}
                             {isScoreItem && scoreItemData && (
-                                <Text style={[styles.itemDetailText, { marginTop: 20 }]}> 
+                                <Text style={[styles.itemDetailText, { marginTop: 20 }]} allowFontScaling={false}> 
                                     {scoreItemData.aiExplanation || "L'analisi AI specifica per questo punteggio sarà disponibile a breve."}
                                 </Text>
                             )}
@@ -3075,13 +3551,29 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     return (
       <View style={styles.ingredientsEditorContainer}>
         <View style={styles.ingredientsEditorHeader}>
-          <Text style={styles.ingredientsEditorTitle}>Componenti del pasto</Text>
+          <Text style={styles.ingredientsEditorTitle} allowFontScaling={false}>Componenti del pasto</Text>
           <View style={{flexDirection: 'row'}}>
             {isSavingIngredients && (
                     <ActivityIndicator size="small" color={colors.primary} />
             )}
           </View>
         </View>
+
+        {/* Informativa per prodotti da analisi foto aperti dal diario */}
+        {openedFromDiary && (
+          <View style={styles.diaryNoticeWrapper}>
+            <View style={styles.diaryNoticeContainer}>
+              <View style={styles.diaryNoticeHeader}>
+                <Ionicons name="information-circle" size={20} color="#FF9900" />
+                <Text style={styles.diaryNoticeTitle} allowFontScaling={false}>Informazione Importante</Text>
+              </View>
+              <Text style={styles.diaryNoticeText} allowFontScaling={false}>
+                Eventuali componenti aggiunti o porzioni modificate dopo l'inserimento nel diario 
+                potrebbero aver cambiato i valori nutrizionali rispetto a quelli originariamente registrati.
+              </Text>
+            </View>
+          </View>
+        )}
 
         {/* Ingredienti con nuovo stile card con ombra direzionata */}
         {editableIngredients.map((ingredient, index) => (
@@ -3091,8 +3583,8 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               {/* Nome ingrediente con indicatore di quantità sulla stessa riga */}
               <View style={{ flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', paddingBottom: 8, marginBottom: 5, paddingTop: 20 }}>
 
-                <Text style={styles.quantityPrefixText}>x{ingredient.quantity || 1}</Text>
-              <Text style={styles.ingredientNameText}>{ingredient.name}</Text>
+                <Text style={styles.quantityPrefixText} allowFontScaling={false}>x{ingredient.quantity || 1}</Text>
+              <Text style={styles.ingredientNameText} allowFontScaling={false}>{ingredient.name}</Text>
               </View>
               
               {/* Riga con grammi, kcal e pulsante elimina */}
@@ -3106,7 +3598,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                       // Scorro alla posizione dell'input quando viene attivato
                       scrollToActiveComponent(`weight-${ingredient.id}`);
                     }}
-                    activeOpacity={0.7}
+                    activeOpacity={1}
                   >
                     <View 
                       style={[
@@ -3139,8 +3631,8 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                         />
                       ) : (
                         <View style={styles.weightDisplayContainer}>
-                          <Text style={styles.ingredientWeightText}>{ingredient.estimated_weight_g.toString()}</Text>
-                          <Text style={{color: colors.text, fontFamily: 'BricolageGrotesque-Regular', marginLeft: 1}}>g</Text>
+                          <Text style={styles.ingredientWeightText} allowFontScaling={false}>{ingredient.estimated_weight_g.toString()}</Text>
+                          <Text style={{color: colors.text, fontFamily: 'BricolageGrotesque-Regular', marginLeft: 1}} allowFontScaling={false}>g</Text>
                           <Ionicons name="pencil-outline" size={14} color={colors.textMuted} style={{marginLeft: 4, marginRight: 0}} />
                         </View>
                       )}
@@ -3148,7 +3640,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                   </TouchableOpacity>
                 
                 {/* Calorie (senza container) */}
-                <Text style={styles.ingredientCaloriesText}>~{Math.round(ingredient.estimated_calories_kcal)} kcal</Text>
+                <Text style={styles.ingredientCaloriesText} allowFontScaling={false}>~{Math.round(ingredient.estimated_calories_kcal)} kcal</Text>
                 </View>
                 
                 {/* Icona cestino semplice */}
@@ -3175,7 +3667,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                   }
                 }}
               >
-                <Text style={{fontSize: 18, fontWeight: '600', color: BORDER_COLOR, fontFamily: 'BricolageGrotesque-Bold'}}>Nuovo componente</Text>
+                <Text style={{fontSize: 18, fontWeight: '600', color: BORDER_COLOR, fontFamily: 'BricolageGrotesque-Bold'}} allowFontScaling={false}>Nuovo componente</Text>
                 <TouchableOpacity 
                   onPress={() => {
                     setIsAddingIngredient(false);
@@ -3191,7 +3683,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
 
               {/* Nome componente con hint chiaro */}
               <View style={{marginBottom: 16}}>
-                <Text style={{fontSize: 14, color: colors.textMuted, marginBottom: 6, fontFamily: 'BricolageGrotesque-Regular'}}>Cosa aggiungi?</Text>
+                <Text style={{fontSize: 14, color: colors.textMuted, marginBottom: 6, fontFamily: 'BricolageGrotesque-Regular'}} allowFontScaling={false}>Cosa aggiungi?</Text>
               <TextInput 
                   style={{
                     borderWidth: 1,
@@ -3217,7 +3709,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               <View style={{flexDirection: 'row', marginBottom: 8}}>
                 {/* Quantità */}
                 <View style={{flex: 1}}>
-                  <Text style={{fontSize: 14, color: colors.textMuted, marginBottom: 6, fontFamily: 'BricolageGrotesque-Regular'}}>Quantità</Text>
+                  <Text style={{fontSize: 14, color: colors.textMuted, marginBottom: 6, fontFamily: 'BricolageGrotesque-Regular'}} allowFontScaling={false}>Quantità</Text>
                   <View style={{flexDirection: 'row', borderWidth: 1, borderColor: '#ddd', borderRadius: 8, backgroundColor: '#fafafa', alignItems: 'center', overflow: 'hidden'}}>
                 <TextInput
                       style={{paddingHorizontal: 12, paddingVertical: 10, fontSize: 16, color: BORDER_COLOR, fontFamily: 'BricolageGrotesque-Regular', flex: 1}}
@@ -3259,7 +3751,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                 
                 {/* Peso */}
                 <View style={{flex: 1}}>
-                  <Text style={{fontSize: 14, color: colors.textMuted, marginBottom: 6, fontFamily: 'BricolageGrotesque-Regular'}}>Peso (g)</Text>
+                  <Text style={{fontSize: 14, color: colors.textMuted, marginBottom: 6, fontFamily: 'BricolageGrotesque-Regular'}} allowFontScaling={false}>Peso (g)</Text>
                   <View style={{flexDirection: 'row', borderWidth: 1, borderColor: '#ddd', borderRadius: 8, backgroundColor: '#fafafa', alignItems: 'center', paddingHorizontal: 12}}>
                     <TextInput
                       style={{paddingVertical: 10, paddingRight: 4, fontSize: 16, color: BORDER_COLOR, fontFamily: 'BricolageGrotesque-Regular', flex: 1}}
@@ -3271,13 +3763,13 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                       selectTextOnFocus={true}
                       onFocus={() => scrollToActiveComponent('new-ingredient-form')}
                 />
-                    <Text style={{fontSize: 16, color: colors.textMuted, fontFamily: 'BricolageGrotesque-Regular'}}>g</Text>
+                    <Text style={{fontSize: 16, color: colors.textMuted, fontFamily: 'BricolageGrotesque-Regular'}} allowFontScaling={false}>g</Text>
                   </View>
                 </View>
               </View>
               
               {/* Suggerimento e avvertenza peso */}
-              <Text style={{fontSize: 13, color: colors.textMuted, fontFamily: 'BricolageGrotesque-Regular', marginBottom: 16}}>
+              <Text style={{fontSize: 13, color: colors.textMuted, fontFamily: 'BricolageGrotesque-Regular', marginBottom: 16}} allowFontScaling={false}>
                 Se non specifichi il peso, verrà stimata una porzione media
               </Text>
 
@@ -3289,7 +3781,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                     onPress={handleConfirmAddIngredient}
                   >
                   <Ionicons name="checkmark-circle" size={22} color="#000" style={{marginRight: 8}} />
-                  <Text style={{color: '#fff', fontSize: 16, fontWeight: '600', fontFamily: 'BricolageGrotesque-SemiBold'}}>Aggiungi al pasto</Text>
+                  <Text style={{color: '#fff', fontSize: 16, fontWeight: '600', fontFamily: 'BricolageGrotesque-SemiBold'}} allowFontScaling={false}>Aggiungi al pasto</Text>
                   </TouchableOpacity>
               </View>
             </View>
@@ -3307,7 +3799,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
               }}
             >
               <Ionicons name="add-circle" size={24} color={colors.primary} style={{marginRight: 8}}/>
-              <Text style={{color: colors.primary, fontSize: 16, fontWeight: '600', fontFamily: 'BricolageGrotesque-SemiBold'}}>Aggiungi componente</Text>
+              <Text style={{color: colors.primary, fontSize: 16, fontWeight: '600', fontFamily: 'BricolageGrotesque-SemiBold'}} allowFontScaling={false}>Aggiungi componente</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -3595,24 +4087,61 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     </View>
   );
 
-  // Componente per l'animazione di caricamento con effetto glowing
+    // Componente per l'animazione di caricamento pulita e minimalista
   const LoadingAnimation = () => {
-    const [glowOpacity, setGlowOpacity] = useState(0.3);
+    const [dotOpacity, setDotOpacity] = useState(0.3);
     
     useEffect(() => {
-      const glowInterval = setInterval(() => {
-        setGlowOpacity(prev => prev === 0.3 ? 0.8 : 0.3);
-      }, 1000);
+      const interval = setInterval(() => {
+        setDotOpacity(prev => prev === 0.3 ? 1 : 0.3);
+      }, 800);
       
-      return () => clearInterval(glowInterval);
+      return () => clearInterval(interval);
     }, []);
+
+    // Funzione semplificata per ottenere solo l'icona
+    const getStepIcon = (message: string) => {
+      if (message.includes('Analisi immagine')) return 'camera-outline';
+      if (message.includes('Riconoscimento')) return 'scan-outline';
+      if (message.includes('valori nutrizionali')) return 'nutrition-outline';
+      if (message.includes('punteggio salute')) return 'heart-outline';
+      if (message.includes('raccomandazioni')) return 'bulb-outline';
+      if (message.includes('Finalizzazione')) return 'checkmark-circle-outline';
+      return 'refresh-outline';
+    };
     
     return (
-      <View style={styles.loadingAnimationContainer}>
-        <View style={[styles.loadingCard, { backgroundColor: '#FFFFFF' }]}>
-          <View style={styles.loadingContent}>
-            <ActivityIndicator size="large" color={colors.primary} style={styles.loadingSpinner} />
-            <Text style={styles.loadingMessage}>{currentLoadingMessage}</Text>
+      <View style={styles.cleanLoadingContainer}>
+        <View style={styles.cleanLoadingCard}>
+          {/* Icona centrale semplice */}
+          <View style={styles.cleanIconContainer}>
+            <Ionicons 
+              name={getStepIcon(currentLoadingMessage) as any} 
+              size={28} 
+              color={colors.primary} 
+            />
+          </View>
+          
+          {/* Messaggio principale */}
+          <Text style={styles.cleanLoadingMessage} allowFontScaling={false}>
+            {currentLoadingMessage}
+          </Text>
+          
+          {/* Progress bar minimalista */}
+          <View style={styles.cleanProgressContainer}>
+            <View style={styles.cleanProgressBackground}>
+              <View style={[
+                styles.cleanProgressFill,
+                { width: `${(loadingMessageIndex + 1) * (100 / 6)}%` }
+              ]} />
+            </View>
+          </View>
+          
+          {/* Dots animati semplici */}
+          <View style={styles.cleanDotsContainer}>
+            <View style={[styles.cleanDot, { opacity: dotOpacity }]} />
+            <View style={[styles.cleanDot, { opacity: dotOpacity * 0.7 }]} />
+            <View style={[styles.cleanDot, { opacity: dotOpacity * 0.4 }]} />
           </View>
         </View>
       </View>
@@ -3724,7 +4253,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
     return (
       <View style={styles.modernNutritionSection}>
         {/* Titolo uniforme con gli altri titoli delle sezioni */}
-        <Text style={styles.scoreSectionTitle}>
+        <Text style={styles.scoreSectionTitle} allowFontScaling={false}>
           {tableTitle}
         </Text>
 
@@ -3735,11 +4264,18 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
             styles.nutritionMainCardContainer,
             { 
               paddingBottom: nutritionData.some(n => ['saturated_fat_100g', 'sugars_100g', 'fiber_100g', 'salt_100g'].includes(n.key as string)) 
-                ? 16  // Padding normale quando ci sono valori secondari
-                : 5  // Padding medio quando ci sono solo valori principali
+                ? 8   // Padding ridotto quando ci sono valori secondari
+                : -5  // Padding negativo per ridurre ulteriormente lo spazio
             }
           ]}>
-            <View style={styles.nutritionGridContainer}>
+            <View style={[
+              styles.nutritionGridContainer,
+              {
+                marginBottom: nutritionData.some(n => ['saturated_fat_100g', 'sugars_100g', 'fiber_100g', 'salt_100g'].includes(n.key as string)) 
+                  ? 0   // Margin normale quando ci sono valori secondari
+                  : -4 // Margin negativo per ridurre lo spazio quando ci sono solo valori principali
+              }
+            ]}>
               {nutritionData.map((nutrient, index) => {
                 const progressPercentage = nutrient.maxValue 
                   ? Math.min((nutrient.value as number) / nutrient.maxValue * 100, 100) 
@@ -3768,12 +4304,12 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                       </View>
                       
                       {/* Valore */}
-                      <Text style={isSecondary ? styles.nutritionValueTextSecondary : styles.nutritionValueText}>
+                      <Text style={isSecondary ? styles.nutritionValueTextSecondary : styles.nutritionValueText} allowFontScaling={false}>
                         {formatNutritionValue(nutrient.value as number, nutrient.unit)}
                       </Text>
                       
                       {/* Label */}
-                      <Text style={isSecondary ? styles.nutritionLabelTextSecondary : styles.nutritionLabelText}>
+                      <Text style={isSecondary ? styles.nutritionLabelTextSecondary : styles.nutritionLabelText} allowFontScaling={false}>
                         {nutrient.label}
                       </Text>
                       
@@ -3797,6 +4333,8 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       </View>
     );
   };
+
+
 
   return (
     <View style={styles.container}>
@@ -3825,6 +4363,24 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
           </TouchableOpacity>
         </View>
 
+        {/* Pulsante Aggiungi al Tracking Calorie */}
+        {displayProductInfo && !loadingInitialData && !showLoadingAnimation && (
+          <TouchableOpacity 
+            style={styles.trackingButton} 
+            onPress={handleAddToTracking}
+            disabled={addingToTracking}
+          >
+            {addingToTracking ? (
+              <ActivityIndicator size="small" color="#00463b" />
+            ) : (
+              <Ionicons name="add-circle" size={20} color="#00463b" />
+            )}
+            <Text style={styles.trackingButtonText} allowFontScaling={false}>
+              {addingToTracking ? 'Aggiungendo...' : 'Aggiungi al tracking calorie'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         <View style={styles.topCardWrapper}>
             <View style={styles.topCardShadow} />
             <View style={styles.topCardContainer}>
@@ -3850,7 +4406,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                             <View style={[styles.skeletonText, { width: '80%', height: 24 }]} />
                           </View>
                         ) : (
-                          <Text style={styles.topCardProductName} numberOfLines={2}>
+                          <Text style={styles.topCardProductName} numberOfLines={2} allowFontScaling={false}>
                             {productName || "Nome non disponibile"}
                           </Text>
                         )}
@@ -3861,7 +4417,7 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                             <View style={[styles.skeletonText, { width: '60%', height: 18, marginTop: 8 }]} />
                           </View>
                         ) : (
-                          <Text style={styles.topCardBrandName} numberOfLines={1}>
+                          <Text style={styles.topCardBrandName} numberOfLines={1} allowFontScaling={false}>
                             {brandName || "Marca non disponibile"}
                           </Text>
                         )}
@@ -3883,23 +4439,23 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                                   <Ionicons 
                                     name="heart" 
                                     size={18} 
-                                    color={getScoreColorForIcon(nutritionGrade, 'nutri', healthScoreForIcon)} 
+                                    color={getScoreColor(healthScoreForIcon)} 
                                     style={styles.scoreIconStyle} 
                                   />
-                                  <Text style={styles.scoreValueStyle}>
+                                  <Text style={styles.scoreValueStyle} allowFontScaling={false}>
                                     {healthScoreForIcon}
                                   </Text>
                                 </View>
                               )}
-                              {(sustainabilityScoreForIcon !== undefined && !isCurrentProductFromPhotoAnalysis) && (
+                              {(sustainabilityScoreForIcon !== undefined && sustainabilityScoreForIcon > 0 && !isCurrentProductFromPhotoAnalysis) && (
                                 <View style={[styles.scoreIconTextContainer, { marginLeft: healthScoreForIcon !== undefined ? 15 : 0} ]}>
                                   <Ionicons 
                                     name="leaf" 
                                     size={18} 
-                                    color={getScoreColorForIcon(currentEcoScoreGrade, 'eco', sustainabilityScoreForIcon)} 
+                                    color={getScoreColor(sustainabilityScoreForIcon)} 
                                     style={styles.scoreIconStyle}
                                   />
-                                  <Text style={styles.scoreValueStyle}>
+                                  <Text style={styles.scoreValueStyle} allowFontScaling={false}>
                                     {sustainabilityScoreForIcon}
                                   </Text>
                                 </View>
@@ -3915,13 +4471,15 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                   <DescriptionSkeleton />
                 ) : (
                   aiAnalysis && aiAnalysis.analysis && aiAnalysis.analysis.trim() !== "" && (
-                    <Text style={styles.topCardProductSummaryText}>
+                    <Text style={styles.topCardProductSummaryText} allowFontScaling={false}>
                       {aiAnalysis.analysis}
                     </Text>
                   )
                 )}
             </View>
       </View>
+      
+
       
       {/* Animazione di caricamento per prodotti con barcode E analisi foto */}
       {showLoadingAnimation && (
@@ -3931,22 +4489,31 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
       )}
 
       {/* Editor ingredienti per prodotti da foto */}
-      {isCurrentProductFromPhotoAnalysis && renderIngredientsEditor()}
+      {isCurrentProductFromPhotoAnalysis && (
+        <View style={{ 
+          marginTop: aiAnalysis?.calorie_estimation_type === 'breakdown' ? 30 : 0 
+        }}>
+          {renderIngredientsEditor()}
+        </View>
+      )}
           
         {/* Sezione Analisi AI - Solo se NON c'è animazione di caricamento */}
         {showAiScores && !showLoadingAnimation ? (
-          <View style={[styles.aiSectionWrapper, { marginTop: isProductFromBarcodeScan ? 35 : 20 }]}>
+          <View style={[styles.aiSectionWrapper, { 
+            marginTop: isProductFromBarcodeScan ? 50 : 
+                     (isCurrentProductFromPhotoAnalysis && aiAnalysis?.calorie_estimation_type === 'per_100g') ? 50 : 20 
+          }]}>
                 {/* Punteggio Salute Numerico */} 
                 {aiAnalysis.healthScore !== undefined && (
               <View style={{ marginBottom: 16 }}>
-                <Text style={styles.scoreSectionTitle}>Punteggio Salute</Text>
+                <Text style={styles.scoreSectionTitle} allowFontScaling={false}>Punteggio Salute</Text>
                 <View style={styles.scoreRowContainer}>
                   <View style={styles.numericScoreColumn}>
                     <View style={styles.scoreSquareCardWrapper}>
                                     {/* UNIFORM SHADOW/BORDER */}
                                     <View style={styles.scoreSquareCardShadow} /> 
-                                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(nutritionGrade, 'nutri', aiAnalysis.healthScore) }]}>
-                        <Text style={styles.scoreValueTextLarge}>{aiAnalysis.healthScore}</Text>
+                                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColor(aiAnalysis.healthScore) }]}>
+                        <Text style={styles.scoreValueTextLarge} allowFontScaling={false}>{aiAnalysis.healthScore}</Text>
         </View>
                     </View>
                   </View>
@@ -3958,16 +4525,16 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
                 {renderItemList(allHealthItems)}
                 
                  {/* Punteggio Eco Numerico - NON MOSTRARE SE ANALISI FOTO */} 
-                {aiAnalysis.sustainabilityScore !== undefined && !isCurrentProductFromPhotoAnalysis && (
-                    <View style={{marginTop: 30, marginBottom: 16}}> 
-                <Text style={styles.scoreSectionTitle}>Punteggio Eco</Text>
+                {aiAnalysis.sustainabilityScore !== undefined && aiAnalysis.sustainabilityScore > 0 && !isCurrentProductFromPhotoAnalysis && (
+                    <View style={{marginTop: isProductFromBarcodeScan ? 50 : 30, marginBottom: 16}}> 
+                <Text style={styles.scoreSectionTitle} allowFontScaling={false}>Punteggio Eco</Text>
                 <View style={styles.scoreRowContainer}>
                   <View style={styles.numericScoreColumn}>
                     <View style={styles.scoreSquareCardWrapper}>
                                      {/* UNIFORM SHADOW/BORDER */}
                                     <View style={styles.scoreSquareCardShadow} /> 
-                                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColorForIcon(currentEcoScoreGrade, 'eco', aiAnalysis.sustainabilityScore) }]}> 
-                        <Text style={styles.scoreValueTextLarge}>{aiAnalysis.sustainabilityScore}</Text>
+                                    <View style={[styles.scoreSquareCard, { backgroundColor: getScoreColor(aiAnalysis.sustainabilityScore) }]}> 
+                        <Text style={styles.scoreValueTextLarge} allowFontScaling={false}>{aiAnalysis.sustainabilityScore}</Text>
             </View>
                 </View>
           </View>
@@ -3981,19 +4548,106 @@ const ProductDetailScreen: React.FC<Props> = ({ route, navigation }) => {
         ) : null}
 
         {/* Valori nutrizionali per prodotti da analisi foto - PRIMA dell'analisi AI */}
-        {isCurrentProductFromPhotoAnalysis && hasNutritionData() && (
+        {isCurrentProductFromPhotoAnalysis && hasNutritionData() && !showLoadingAnimation && (
           <View style={{marginTop: 20}}>
             {renderNutritionTable()}
           </View>
         )}
 
         {/* Valori nutrizionali per prodotti con barcode - DOPO l'analisi AI */}
-        {isProductFromBarcodeScan && hasNutritionData() && (aiAnalysis || !isAiLoading) && (
+        {isProductFromBarcodeScan && hasNutritionData() && (aiAnalysis || !isAiLoading) && !showLoadingAnimation && (
           <View style={{marginTop: 30}}>
             {renderNutritionTable()}
           </View>
         )}
       </ScrollView>
+
+      {/* Modal per selezione quantità */}
+      <Modal
+        visible={showQuantityModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowQuantityModal(false)}
+      >
+        <KeyboardAvoidingView 
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <TouchableOpacity 
+            style={styles.modalBackdrop}
+            activeOpacity={1}
+            onPress={() => setShowQuantityModal(false)}
+          >
+            <TouchableOpacity 
+              style={styles.modalWrapper}
+              activeOpacity={1}
+              onPress={() => {}} // Previene la chiusura quando si tocca il modal
+            >
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle} allowFontScaling={false}>Inserisci Quantità</Text>
+                  <TouchableOpacity
+                    onPress={() => setShowQuantityModal(false)}
+                    style={styles.modalCloseButton}
+                  >
+                    <Ionicons name="close" size={24} color="#666666" />
+                  </TouchableOpacity>
+                </View>
+
+                {displayProductInfo && (
+                  <View style={styles.modalProductInfo}>
+                    <Text style={styles.modalProductName} allowFontScaling={false}>
+                      {'product_name' in displayProductInfo ? displayProductInfo.product_name : (displayProductInfo as ProductRecord).product_name}
+                    </Text>
+                    {(('brands' in displayProductInfo && displayProductInfo.brands) || 
+                      ('brand' in displayProductInfo && (displayProductInfo as ProductRecord).brand)) && (
+                      <Text style={styles.modalProductBrand} allowFontScaling={false}>
+                        {'brands' in displayProductInfo ? displayProductInfo.brands : (displayProductInfo as ProductRecord).brand}
+                      </Text>
+                    )}
+                  </View>
+                )}
+
+                <View style={styles.quantityInputContainer}>
+                  <Text style={styles.quantityLabel} allowFontScaling={false}>Quantità (grammi)</Text>
+                  <View style={styles.quantityInputField}>
+                    <TextInput
+                      style={styles.quantityModalInput}
+                      value={quantity}
+                      onChangeText={setQuantity}
+                      keyboardType="numeric"
+                      placeholder="100"
+                      autoFocus
+                      returnKeyType="done"
+                      onSubmitEditing={handleQuantityConfirm}
+                    />
+                    <Text style={styles.quantityUnit} allowFontScaling={false}>g</Text>
+                  </View>
+                </View>
+
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={styles.cancelButton}
+                    onPress={() => setShowQuantityModal(false)}
+                  >
+                    <Text style={styles.cancelButtonText} allowFontScaling={false}>Annulla</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[styles.confirmButton, addingToTracking && styles.confirmButtonDisabled]}
+                    onPress={handleQuantityConfirm}
+                    disabled={addingToTracking}
+                  >
+                    <Text style={styles.confirmButtonText} allowFontScaling={false}>
+                      {addingToTracking ? 'Aggiungendo...' : 'Aggiungi'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 };

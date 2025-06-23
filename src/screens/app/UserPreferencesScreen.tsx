@@ -198,12 +198,18 @@ const UserPreferencesScreen: React.FC<Props> = ({ navigation }) => {
                 ]}
               >
                 {/* Ombra direzionale esterna */}
-                <View style={styles.goalCardShadow} />
+                <View style={[
+                  styles.goalCardShadow,
+                  goal.isSelected && { backgroundColor: goal.color || colors.primary }
+                ]} />
                 
                 <TouchableOpacity
-                  style={styles.goalCardContainer}
+                  style={[
+                    styles.goalCardContainer,
+                    goal.isSelected && { borderColor: goal.color || colors.primary }
+                  ]}
                   onPress={() => toggleGoal(goal.id)}
-                  activeOpacity={0.8}
+                  activeOpacity={1}
                 >
                   {/* Layout verticale elegante */}
                   <View style={styles.goalCardLayout}>
@@ -212,25 +218,18 @@ const UserPreferencesScreen: React.FC<Props> = ({ navigation }) => {
                     <View style={styles.goalCardHeader}>
                       <View style={[
                         styles.goalIconWrapper,
-                        { borderColor: goal.color || colors.primary }
+                        goal.isSelected ? {
+                          backgroundColor: goal.color || colors.primary,
+                          borderColor: goal.color || colors.primary,
+                        } : {
+                          borderColor: goal.color || colors.primary,
+                          backgroundColor: 'transparent',
+                        }
                       ]}>
-                        <Animated.View
-                          style={[
-                            styles.goalIconBackground,
-                            {
-                              backgroundColor: goal.color || colors.primary,
-                              opacity: goal.animatedValue.interpolate({
-                                inputRange: [0, 1],
-                                outputRange: [0.1, 1],
-                              })
-                            }
-                          ]}
-                        />
                         <Ionicons 
                           name={goal.icon_name as any || "fitness"} 
                           size={24} 
-                          color={goal.isSelected ? '#fff' : (goal.color || colors.primary)}
-                          style={{ zIndex: 2 }}
+                          color={goal.isSelected ? '#FFFFFF' : (goal.color || colors.primary)}
                         />
                       </View>
                       
@@ -371,14 +370,7 @@ const styles = StyleSheet.create({
     position: 'relative',
     overflow: 'hidden',
   },
-  goalIconBackground: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    borderRadius: 22,
-  },
+
 
   // Contenuto principale
   goalCardContent: {

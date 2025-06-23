@@ -92,13 +92,12 @@ export interface ProductRecord {
   health_analysis?: string;
   health_pros?: Array<{title: string, detail: string}>;
   health_cons?: Array<{title: string, detail: string}>;
+  health_neutrals?: Array<{title: string, detail: string}>;
 
   sustainability_pros?: Array<{title: string, detail: string}>;
   sustainability_cons?: Array<{title: string, detail: string}>;
   sustainability_neutrals?: Array<{title: string, detail: string}>;
-  nutri_score_explanation?: string; // AGGIUNTO
-  nova_explanation?: string;        // AGGIUNTO
-  eco_score_explanation?: string;   // AGGIUNTO
+  // RIMOSSO: nutri_score_explanation, nova_explanation, eco_score_explanation
   calories_estimate?: string;       // AGGIUNTO: Stima calorie per analisi foto
   
   // --- NUOVI CAMPI DA AGGIUNGERE/VERIFICARE ---
@@ -359,18 +358,14 @@ export const saveProductAndManageHistory = async (
       productUpsertPayload.health_analysis = aiAnalysis.analysis;
       productUpsertPayload.health_pros = aiAnalysis.pros;
       productUpsertPayload.health_cons = aiAnalysis.cons;
+      productUpsertPayload.health_neutrals = aiAnalysis.neutrals;
   
   
       productUpsertPayload.sustainability_pros = aiAnalysis.sustainabilityPros;
       productUpsertPayload.sustainability_cons = aiAnalysis.sustainabilityCons;
       productUpsertPayload.sustainability_neutrals = aiAnalysis.sustainabilityNeutrals;
       
-      // Salva spiegazioni score solo per prodotti con barcode (non per analisi foto)
-      if (!isVisualScan) {
-      productUpsertPayload.nutri_score_explanation = aiAnalysis.nutriScoreExplanation;
-      productUpsertPayload.nova_explanation = aiAnalysis.novaExplanation;
-      productUpsertPayload.eco_score_explanation = aiAnalysis.ecoScoreExplanation;
-      }
+      // RIMOSSO: salvataggio spiegazioni score (nutri_score_explanation, nova_explanation, eco_score_explanation)
       productUpsertPayload.calories_estimate = aiAnalysis.calories_estimate;
       
       // --- NUOVE AGGIUNTE CRUCIALI ---
@@ -991,14 +986,13 @@ export const handleBarcodeScan = async (
           analysis: existingProductRecord.health_analysis ?? '',
           pros: existingProductRecord.health_pros ?? [],
           cons: existingProductRecord.health_cons ?? [],
+          neutrals: existingProductRecord.health_neutrals ?? [],
     
           sustainabilityPros: existingProductRecord.sustainability_pros ?? [],
           sustainabilityCons: existingProductRecord.sustainability_cons ?? [],
           sustainabilityNeutrals: existingProductRecord.sustainability_neutrals ?? [],
   
-          nutriScoreExplanation: existingProductRecord.nutri_score_explanation ?? undefined,
-          novaExplanation: existingProductRecord.nova_explanation ?? undefined,
-          ecoScoreExplanation: existingProductRecord.eco_score_explanation ?? undefined
+          // RIMOSSO: nutriScoreExplanation, novaExplanation, ecoScoreExplanation
         };
       }
       
@@ -1087,10 +1081,7 @@ export const fetchOrGenerateAiAnalysisAndUpdateProduct = async (
  
         sustainability_pros, 
         sustainability_cons, 
-        sustainability_neutrals,
-        nutri_score_explanation, 
-        nova_explanation, 
-        eco_score_explanation 
+        sustainability_neutrals
       `
       ) // AGGIUNTO: Campi spiegazione score
       .eq("id", productRecordId)
@@ -1106,9 +1097,7 @@ export const fetchOrGenerateAiAnalysisAndUpdateProduct = async (
         | "sustainability_cons"
         | "sustainability_neutrals"
   
-        | "nutri_score_explanation" // AGGIUNTO: Tipo spiegazione score
-        | "nova_explanation"        // AGGIUNTO: Tipo spiegazione score
-        | "eco_score_explanation"   // AGGIUNTO: Tipo spiegazione score
+        // RIMOSSO: nutri_score_explanation, nova_explanation, eco_score_explanation
       >>();
 
     if (selectError) {
@@ -1129,11 +1118,8 @@ export const fetchOrGenerateAiAnalysisAndUpdateProduct = async (
 
         sustainabilityPros: existingProduct.sustainability_pros ?? [],
         sustainabilityCons: existingProduct.sustainability_cons ?? [],
-        sustainabilityNeutrals: existingProduct.sustainability_neutrals ?? [],
-
-        nutriScoreExplanation: existingProduct.nutri_score_explanation ?? undefined,
-        novaExplanation: existingProduct.nova_explanation ?? undefined,
-        ecoScoreExplanation: existingProduct.eco_score_explanation ?? undefined
+        sustainabilityNeutrals: existingProduct.sustainability_neutrals ?? []
+        // RIMOSSO: nutriScoreExplanation, novaExplanation, ecoScoreExplanation
       };
     }
 
@@ -1178,17 +1164,13 @@ export const fetchOrGenerateAiAnalysisAndUpdateProduct = async (
         health_analysis: aiAnalysis.analysis,
         health_pros: aiAnalysis.pros,
         health_cons: aiAnalysis.cons,
+        health_neutrals: aiAnalysis.neutrals,
         sustainability_pros: aiAnalysis.sustainabilityPros,
         sustainability_cons: aiAnalysis.sustainabilityCons,
       sustainability_neutrals: aiAnalysis.sustainabilityNeutrals
     };
 
-    // Aggiungi spiegazioni score solo per prodotti con barcode (non per analisi foto)
-    if (!isVisualScan) {
-      updateData.nutri_score_explanation = aiAnalysis.nutriScoreExplanation;
-      updateData.nova_explanation = aiAnalysis.novaExplanation;
-      updateData.eco_score_explanation = aiAnalysis.ecoScoreExplanation;
-    }
+    // RIMOSSO: salvataggio spiegazioni score (nutriScoreExplanation, novaExplanation, ecoScoreExplanation)
 
     // 5. Aggiorna il record del prodotto nel DB con la nuova analisi
     const { data: updatedProduct, error: updateError } = await supabase
@@ -1508,17 +1490,13 @@ export const saveProductToDatabase = async (
         // Converti array in stringhe JSON per il DB
         health_pros: Array.isArray(aiAnalysis.pros) ? aiAnalysis.pros.map((p: {title: string, detail: string}) => JSON.stringify(p)) : [],
         health_cons: Array.isArray(aiAnalysis.cons) ? aiAnalysis.cons.map((c: {title: string, detail: string}) => JSON.stringify(c)) : [],
+        health_neutrals: Array.isArray(aiAnalysis.neutrals) ? aiAnalysis.neutrals.map((n: {title: string, detail: string}) => JSON.stringify(n)) : [],
         
         // Sostenibilità (opzionale, potrebbe non essere presente per alcuni tipi di analisi)
         sustainability_pros: Array.isArray(aiAnalysis.sustainabilityPros) ? aiAnalysis.sustainabilityPros.map((p: {title: string, detail: string}) => JSON.stringify(p)) : [],
         sustainability_cons: Array.isArray(aiAnalysis.sustainabilityCons) ? aiAnalysis.sustainabilityCons.map((c: {title: string, detail: string}) => JSON.stringify(c)) : [],
         
-        // Spiegazioni score (solo per prodotti con barcode, non per analisi foto)
-        ...(isProductFromVisualScan(product.code) ? {} : {
-        nutri_score_explanation: aiAnalysis.nutriScoreExplanation || null,
-        nova_explanation: aiAnalysis.novaExplanation || null,
-        eco_score_explanation: aiAnalysis.ecoScoreExplanation || null,
-        }),
+        // RIMOSSO: spiegazioni score (nutriScoreExplanation, novaExplanation, ecoScoreExplanation)
         
         // Metri specifici
 

@@ -163,10 +163,12 @@ export async function createOrUpdateNutritionProfile(profileData: NutritionProfi
   const tdee = calculateTDEE(bmr, profileData.activity_level);
   const targetKcal = calculateTargetCalories(tdee, profileData.goal);
   const macros = calculateMacroTargets(targetKcal, profileData.goal);
+  const bmi = profileData.weight_kg / Math.pow(profileData.height_cm / 100, 2);
 
   const completeProfile = {
     ...profileData,
     user_id: user.id,
+    bmi: Math.round(bmi * 10) / 10, // Arrotonda a 1 decimale
     bmr_kcal: bmr,
     tdee_kcal: tdee,
     target_kcal: targetKcal,

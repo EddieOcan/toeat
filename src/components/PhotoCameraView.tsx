@@ -28,8 +28,9 @@ const PhotoCameraView: React.FC<PhotoCameraViewProps> = ({ onPhotoTaken, isCamer
     if (cameraRef.current) {
       try {
         const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.4, // Ridotta qualità per testare un payload più piccolo
-          // exif: false, // Opzionale: non includere dati EXIF
+          quality: 0.3, // Ulteriormente ridotta per velocità massima (era 0.4)
+          exif: false, // Rimuovi metadati EXIF per ridurre dimensioni
+          skipProcessing: true, // Salta post-processing per velocità
         });
         if (photo && photo.uri) {
           onPhotoTaken(photo.uri);

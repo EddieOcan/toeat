@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack"
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs"
 import { useAuth } from "../contexts/AuthContext"
 import { useTheme } from "../contexts/ThemeContext"
+import { PhotoAnalysisProvider } from "../contexts/PhotoAnalysisContext"
 import { ActivityIndicator, View, Platform } from "react-native"
 import { Ionicons } from "@expo/vector-icons"
 
@@ -41,6 +42,7 @@ export type AppStackParamList = {
     initialProductData?: RawProductData | null
     aiAnalysisResult?: GeminiAnalysisResult | null
     isPhotoAnalysis?: boolean
+    shouldStartAiAnalysis?: boolean
   }
   UserPreferences: undefined
   CalorieTracking: undefined
@@ -132,24 +134,26 @@ const Navigation = () => {
   }
 
   return user ? (
-    <AppStack.Navigator
-      screenOptions={{
-        headerStyle: {
-          backgroundColor: colors.card,
-        },
-        headerTintColor: colors.text,
-        contentStyle: {
-          backgroundColor: colors.background,
-        },
-      }}
-    >
-      <AppStack.Screen name="MainTabs" component={MainTabsNavigator} options={{ headerShown: false }} />
-      <AppStack.Screen name="ProductDetail" component={ProductDetailScreen} options={{ headerShown: false }} />
-      <AppStack.Screen name="UserPreferences" component={UserPreferencesScreen} options={{ headerShown: false }} />
-      <AppStack.Screen name="CalorieTracking" component={CalorieTrackingScreen} options={{ headerShown: false }} />
-      <AppStack.Screen name="NutritionProfileSetup" component={NutritionProfileSetupScreen} options={{ headerShown: false }} />
-      <AppStack.Screen name="SelectProductForDay" component={SelectProductForDayScreen} options={{ headerShown: false }} />
-    </AppStack.Navigator>
+    <PhotoAnalysisProvider>
+      <AppStack.Navigator
+        screenOptions={{
+          headerStyle: {
+            backgroundColor: colors.card,
+          },
+          headerTintColor: colors.text,
+          contentStyle: {
+            backgroundColor: colors.background,
+          },
+        }}
+      >
+        <AppStack.Screen name="MainTabs" component={MainTabsNavigator} options={{ headerShown: false }} />
+        <AppStack.Screen name="ProductDetail" component={ProductDetailScreen} options={{ headerShown: false }} />
+        <AppStack.Screen name="UserPreferences" component={UserPreferencesScreen} options={{ headerShown: false }} />
+        <AppStack.Screen name="CalorieTracking" component={CalorieTrackingScreen} options={{ headerShown: false }} />
+        <AppStack.Screen name="NutritionProfileSetup" component={NutritionProfileSetupScreen} options={{ headerShown: false }} />
+        <AppStack.Screen name="SelectProductForDay" component={SelectProductForDayScreen} options={{ headerShown: false }} />
+      </AppStack.Navigator>
+    </PhotoAnalysisProvider>
   ) : (
     <AuthStack.Navigator
       screenOptions={{

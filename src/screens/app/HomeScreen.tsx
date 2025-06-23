@@ -4,6 +4,7 @@ import React from "react"
 import { useState, useEffect, useRef, useCallback } from "react"
 import {
   View,
+  Text,
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
@@ -30,6 +31,7 @@ import {
   saveProductAndManageHistory,
   getScanHistory,
   handleBarcodeScan,
+  fetchProductFromOpenFoodFacts,
   type ProcessedProductInfo,
   type DisplayableHistoryProduct,
   type RawProductData,
@@ -41,35 +43,11 @@ import { typography } from "../../theme/typography"
 import { type BarcodeScannerViewRef } from "../../components/BarcodeScannerView"
 import RecentProductsSection from "../../components/RecentProductsSection"
 import { useRecentProducts } from "../../contexts/RecentProductsContext"
+import { supabase } from "../../lib/supabase"
+import { getScoreColor } from "../../utils/formatters"
+import { optimizedProductService } from "../../services/optimizedApi"
 
-// Funzioni helper per colore punteggio (RIAGGIUNTE)
-const getColorFromNumericScore_ForRecent = (score: number | undefined | null, currentThemeColors: any): string => {
-  const defaultColor = currentThemeColors.textMuted || '#888888'; 
-  if (score === undefined || score === null) return defaultColor;
-  if (score >= 81) return '#1E8F4E'; 
-  if (score >= 61) return '#7AC547'; 
-  if (score >= 41) return '#FFC734'; 
-  if (score >= 21) return '#FF9900'; 
-  if (score >= 0) return '#FF0000';   
-  return defaultColor; 
-};
-
-const getScoreColor_ForRecent = (grade: string | undefined | null, type: 'nutri' | 'eco', numericScore?: number | undefined | null, currentThemeColors?: any) => {
-  if (grade && typeof grade === 'string' && grade.toLowerCase() !== 'unknown') {
-    if (type === 'nutri') {
-      switch (grade.toLowerCase()) {
-        case "a": return '#2ECC71'; case "b": return '#82E0AA'; case "c": return '#F4D03F'; 
-        case "d": return '#E67E22'; case "e": return '#EC7063'; default: break; 
-      }
-    } else { 
-      switch (grade.toLowerCase()) {
-        case "a": return '#1D8348'; case "b": return '#28B463'; case "c": return '#F5B041'; 
-        case "d": return '#DC7633'; case "e": return '#BA4A00'; default: break; 
-      }
-    }
-  }
-  return getColorFromNumericScore_ForRecent(numericScore, currentThemeColors);
-};
+// Funzioni helper rimosse - ora si usa getScoreColor globale
 
 // interface ScannerScreenProps extends CompositeScreenProps<
 //     BottomTabScreenProps<MainTabsParamList, 'Home'>, // Sarà 'Scanner'
@@ -197,7 +175,7 @@ const styles = StyleSheet.create({
     borderColor: '#000000',
     position: 'relative',
     zIndex: 1, 
-    resizeMode: 'contain',
+    resizeMode: 'cover',
   },
   recentProductCardContent: { 
     flex: 1,
@@ -260,37 +238,69 @@ const styles = StyleSheet.create({
     height: 35,
     resizeMode: 'contain'
   },
-  // Stile per l'icona preferenze
-  preferencesButton: {
+  // Stili per il pulsante preferenze (identico al pulsante Scansiona)
+  preferencesButtonWrapper: {
     position: 'absolute',
-    top: 40,
     right: 20,
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
     zIndex: 10,
+  },
+  preferencesButtonShadow: {
+    position: 'absolute',
+    top: 3,
+    left: 3,
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#4A90E2', // Azzurro per l'ombra
+    borderRadius: 16,
+    zIndex: 0,
+  },
+  preferencesButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
+    padding: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#FFFFFF', // Sfondo bianco
+    borderWidth: 2,
+    borderColor: '#4A90E2', // Bordo azzurro
+    position: 'relative',
+    zIndex: 1,
+    minHeight: 48,
+  },
+  preferencesButtonText: {
+    fontSize: 14,
+    fontFamily: 'BricolageGrotesque-SemiBold',
+    color: '#4A90E2', // Testo azzurro
+    marginLeft: 8,
   },
 });
 
 const HomeScreen: React.FC<Props> = ({ navigation }) => {
+  // TUTTI GLI HOOKS DEVONO ESSERE ALL'INIZIO DEL COMPONENTE
   const [isScannerCameraActive, setIsScannerCameraActive] = useState(true);
+  const [isProcessingScan, setIsProcessingScan] = useState(false);
+  const [cameraViewHeight, setCameraViewHeight] = useState(screenHeight);
+  const [processingState, setProcessingState] = useState({
+    isProcessing: false,
+    currentBarcode: null as string | null,
+    pendingCount: 0
+  });
+  
+  // HOOKS DI CONTESTO
   const { colors } = useTheme(); 
-  const { user } = useAuth()
-  const [cameraViewHeight, setCameraViewHeight] = useState(screenHeight); 
+  const { user } = useAuth();
   const insets = useSafeAreaInsets();
+  const { reloadRecentProducts, addPendingProduct, updatePendingProduct, removePendingProduct, pendingProducts } = useRecentProducts();
+  
+  // REFS
   const barcodeScannerRef = useRef<BarcodeScannerViewRef>(null);
-  const { reloadRecentProducts } = useRecentProducts();
+  const processingBarcodes = useRef(new Set<string>()).current;
+  const productCheckCache = useRef(new Map<string, { timestamp: number, result: any }>()).current;
+  const lastReloadRef = useRef(0);
+  
+  // COSTANTI
+  const CACHE_DURATION = 30000; // 30 secondi di cache
 
   useEffect(() => {
     const calculateLayout = () => {
@@ -309,12 +319,23 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
   }, []); 
 
   useFocusEffect(useCallback(() => {
-    if (user) { reloadRecentProducts(); }
+    if (user) { 
+      // Ottimizza: ricarica solo se necessario
+      const now = Date.now();
+      if (now - lastReloadRef.current > 10000) { // Ricarica max ogni 10 secondi
+        reloadRecentProducts();
+        lastReloadRef.current = now;
+      }
+    }
     barcodeScannerRef.current?.resetScanner();
     setIsScannerCameraActive(true);
+    setProcessingState(prev => ({ ...prev, isProcessing: false, currentBarcode: null }));
+    processingBarcodes.clear();
     console.log("[HomeScreen] Scanner focus Gained, Camera Active: true");
     return () => {
       setIsScannerCameraActive(false);
+      setProcessingState(prev => ({ ...prev, isProcessing: false, currentBarcode: null }));
+      processingBarcodes.clear();
       console.log("[HomeScreen] Scanner focus Lost, Camera Active: false");
     };
   }, [user, reloadRecentProducts]));
@@ -330,28 +351,144 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
 
   const processBarcodeScan = async (barcode: string) => {
     if (!user) { Alert.alert("Login Richiesto", "Devi effettuare il login."); return; }
-    try {
-      const result: ProcessedProductInfo = await handleBarcodeScan(barcode, user.id);
-      if (result.source === "error") { 
-        Alert.alert("Errore Processamento", result.errorMessage || "Errore sconosciuto.");
-        // Reset scanner per permettere nuove scansioni
-        barcodeScannerRef.current?.resetScanner();
-      } else if (result.source === "not_found_off") {
-        Alert.alert("Prodotto Non Trovato", result.errorMessage || `Barcode ${barcode} non trovato.`);
-        // Reset scanner per permettere nuove scansioni
-        barcodeScannerRef.current?.resetScanner();
-      } else if (result.dbProduct?.id) { 
-        navigateToDetail(result.dbProduct.id, result.productData, result.aiAnalysis); 
-      }
-      else { 
-        Alert.alert("Errore Inatteso", "Dettagli prodotto non disponibili."); 
-        // Reset scanner per permettere nuove scansioni
-        barcodeScannerRef.current?.resetScanner();
-      }
-    } catch (error: any) { 
-      Alert.alert("Errore Critico", error.message || "Errore grave."); 
-      // Reset scanner per permettere nuove scansioni
+    
+    // CONTROLLO 1: Blocca se c'è già un'elaborazione in corso
+    if (processingState.isProcessing) {
+      console.log(`[BARCODE SCAN] Scansione ignorata - elaborazione generale in corso`);
       barcodeScannerRef.current?.resetScanner();
+      return;
+    }
+    
+    // CONTROLLO 2: Verifica se questo specifico barcode è già in elaborazione
+    if (processingBarcodes.has(barcode)) {
+      console.log(`[BARCODE SCAN] Scansione ignorata - barcode ${barcode} già in elaborazione`);
+      barcodeScannerRef.current?.resetScanner();
+      return;
+    }
+    
+    // CONTROLLO 3: Verifica se esiste già una card pending per questo barcode
+    const existingPendingCard = pendingProducts.find(p => p.barcode === barcode);
+    if (existingPendingCard) {
+      console.log(`[BARCODE SCAN] Scansione ignorata - esiste già card pending per barcode: ${barcode}`);
+      barcodeScannerRef.current?.resetScanner();
+      return;
+    }
+    
+    // CONTROLLO 4: Verifica cache prima di chiamare il database
+    const cacheKey = `${user.id}-${barcode}`;
+    const cached = productCheckCache.get(cacheKey);
+    const now = Date.now();
+    
+    if (cached && (now - cached.timestamp < CACHE_DURATION)) {
+      console.log(`[BARCODE SCAN] Utilizzando risultato dalla cache per ${barcode}`);
+      if (cached.result) {
+        // Prodotto esiste in cache, naviga direttamente
+        navigation.navigate("ProductDetail", { 
+          productRecordId: cached.result.id,
+          shouldStartAiAnalysis: !cached.result.health_score || cached.result.health_score <= 0
+        });
+        barcodeScannerRef.current?.resetScanner();
+        return;
+      }
+    }
+    
+    // Marca questo barcode come in elaborazione
+    processingBarcodes.add(barcode);
+    setProcessingState(prev => ({ 
+      ...prev, 
+      isProcessing: true, 
+      currentBarcode: barcode,
+      pendingCount: prev.pendingCount + 1
+    }));
+    
+    try {
+      console.log(`[BARCODE SCAN] Inizio nuovo flusso ottimizzato per barcode: ${barcode}`);
+      
+             // 1. CONTROLLA SE ESISTE GIÀ NEL DATABASE (ottimizzato con servizio)
+       const existingProduct = await optimizedProductService.checkProductExists(barcode, user.id, true);
+
+       // Aggiorna cache manualmente se necessario
+       productCheckCache.set(cacheKey, { timestamp: now, result: existingProduct });
+
+      if (existingProduct) {
+        console.log(`[BARCODE SCAN] Prodotto esistente trovato: ${existingProduct.id}`);
+        
+        // Naviga direttamente senza ricaricare la lista
+        navigation.navigate("ProductDetail", { 
+          productRecordId: existingProduct.id,
+          shouldStartAiAnalysis: !existingProduct.health_score || existingProduct.health_score <= 0
+        });
+        barcodeScannerRef.current?.resetScanner();
+        return;
+      }
+
+      // 2. CREA LA CARD PENDING E PROCESSA IN PARALLELO
+      const tempId = addPendingProduct(barcode);
+      console.log(`[BARCODE SCAN] Aggiunta card pending con ID: ${tempId}`);
+
+      // 3. RECUPERA DA OPENFOODFACTS E PROCESSA IN PARALLELO
+      console.log(`[BARCODE SCAN] Recupero dati da OpenFoodFacts per: ${barcode}`);
+      const [rawProductData] = await Promise.all([
+        fetchProductFromOpenFoodFacts(barcode)
+      ]);
+
+      if (!rawProductData || !rawProductData.product_name) {
+        console.warn(`[BARCODE SCAN] Prodotto non trovato su OpenFoodFacts: ${barcode}`);
+        removePendingProduct(tempId);
+        Alert.alert("Prodotto Non Trovato", `Barcode ${barcode} non trovato su OpenFoodFacts.`);
+        barcodeScannerRef.current?.resetScanner();
+        return;
+      }
+
+      // 4. AGGIORNA LA CARD PENDING CON I DATI DA OFF
+      updatePendingProduct(tempId, {
+        isLoading: false,
+        product_name: rawProductData.product_name,
+        brand: rawProductData.brands,
+        product_image: rawProductData.image_url,
+        awaitingAiAnalysis: true
+      });
+
+      // 5. SALVA NEL DATABASE (ottimizzato)
+      console.log(`[BARCODE SCAN] Salvataggio dati base per: ${barcode}`);
+      const savedProduct = await saveProductAndManageHistory(
+        user.id,
+        barcode,
+        rawProductData,
+        null,
+        rawProductData.image_url,
+        false
+      );
+
+      if (savedProduct?.id) {
+        console.log(`[BARCODE SCAN] Prodotto salvato con ID: ${savedProduct.id}`);
+        
+        // CORREZIONE: Non rimuovere la card pending qui!
+        // La card pending deve rimanere fino a quando l'utente clicca "Analizza"
+        // removePendingProduct(tempId); // RIMOSSO
+        
+        // Ricarica i prodotti recenti per aggiornare la lista
+        await reloadRecentProducts();
+      } else {
+        Alert.alert("Errore Salvataggio", "Impossibile salvare il prodotto.");
+        removePendingProduct(tempId);
+      }
+
+      barcodeScannerRef.current?.resetScanner();
+
+    } catch (error: any) { 
+      console.error(`[BARCODE SCAN] Errore critico:`, error);
+      Alert.alert("Errore Critico", error.message || "Errore grave."); 
+      barcodeScannerRef.current?.resetScanner();
+    } finally {
+      // IMPORTANTE: Rimuovi il barcode dal Set e sblocca le scansioni
+      processingBarcodes.delete(barcode);
+      setProcessingState(prev => ({ 
+        ...prev, 
+        isProcessing: prev.pendingCount <= 1 ? false : prev.isProcessing,
+        currentBarcode: prev.currentBarcode === barcode ? null : prev.currentBarcode,
+        pendingCount: Math.max(0, prev.pendingCount - 1)
+      }));
     }
   };
 
@@ -373,13 +510,18 @@ const HomeScreen: React.FC<Props> = ({ navigation }) => {
             isCameraActive={isScannerCameraActive}
         />
         
-        {/* Icona Preferenze */}
-        <TouchableOpacity 
-          style={[styles.preferencesButton, { top: insets.top + 10 }]}
-          onPress={navigateToPreferences}
-        >
-          <Ionicons name="settings" size={24} color="#333" />
-        </TouchableOpacity>
+        {/* Pulsante Preferenze */}
+        <View style={[styles.preferencesButtonWrapper, { top: insets.top + 10 }]}>
+          <View style={styles.preferencesButtonShadow} />
+          <TouchableOpacity 
+            style={styles.preferencesButton}
+            onPress={navigateToPreferences}
+            activeOpacity={1}
+          >
+            <Ionicons name="settings" size={20} color="#4A90E2" />
+            <Text style={styles.preferencesButtonText} allowFontScaling={false}>Le mie preferenze</Text>
+          </TouchableOpacity>
+        </View>
       </View>
       
       <View style={{position: 'relative', marginTop: -WAVE_CORNER_RADIUS}}>

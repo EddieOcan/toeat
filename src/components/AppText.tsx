@@ -10,6 +10,7 @@ interface AppTextProps extends TextProps {
   fontType?: keyof typeof customFonts; // Es. 'AppRegular', 'AppBold' per override specifico
   color?: string; // Per permettere override del colore direttamente
   style?: TextStyle | TextStyle[];
+  allowFontScaling?: boolean; // Permettiamo override se necessario
 }
 
 const AppText: React.FC<AppTextProps> = ({
@@ -17,6 +18,7 @@ const AppText: React.FC<AppTextProps> = ({
   variant,
   fontType,
   color: textColor,
+  allowFontScaling = false, // Default a false per dimensioni consistenti
   children,
   ...props
 }) => {
@@ -40,7 +42,11 @@ const AppText: React.FC<AppTextProps> = ({
   ]);
 
   return (
-    <RNText style={combinedStyle} {...props}>
+    <RNText 
+      style={combinedStyle} 
+      allowFontScaling={allowFontScaling}
+      {...props}
+    >
       {children}
     </RNText>
   );

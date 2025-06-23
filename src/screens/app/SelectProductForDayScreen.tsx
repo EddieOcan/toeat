@@ -10,11 +10,16 @@ import {
   TextInput,
   Image,
   Platform,
+  KeyboardAvoidingView,
+  FlatList,
 } from 'react-native';
+import { scaleFont } from '../../theme/typography';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { Picker } from '@react-native-picker/picker';
 import { getRecentProducts, ProductRecord } from '../../services/api';
 import { addProductToDay } from '../../services/nutritionApi';
+import { getScoreColor } from '../../utils/formatters';
 
 // Costanti di stile per uniformare con l'app
 const BACKGROUND_COLOR = '#f8f4ec';
@@ -40,9 +45,10 @@ export default function SelectProductForDayScreen({ navigation, route }: Props) 
   const [loading, setLoading] = useState(true);
   const [showQuantityModal, setShowQuantityModal] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<ProductRecord | null>(null);
-  const [quantity, setQuantity] = useState('100');
+  const [quantity, setQuantity] = useState(100);
   const [adding, setAdding] = useState(false);
   const [activeTab, setActiveTab] = useState<'recent' | 'saved'>('recent');
+  const [healthFilter, setHealthFilter] = useState<'all' | 'eccellente' | 'ottimo' | 'buono' | 'discreto' | 'scarso'>('all');
   const [entriesNutritionVisibility, setEntriesNutritionVisibility] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -69,14 +75,50 @@ export default function SelectProductForDayScreen({ navigation, route }: Props) 
     }));
   };
 
-  const getHealthScoreColor = (score: number | undefined | null): string => {
-    if (score === undefined || score === null) return '#888888';
-    if (score >= 81) return '#1E8F4E'; 
-    if (score >= 61) return '#7AC547'; 
-    if (score >= 41) return '#FFC734'; 
-    if (score >= 21) return '#FF9900'; 
-    if (score >= 0) return '#FF0000';   
-    return '#888888';
+  const getNutrientIconName = (nutrientKey: string): string => {
+    switch (nutrientKey) {
+      case 'energy_kcal_100g': return 'flame';
+      case 'fat_100g': return 'cafe';
+      case 'carbohydrates_100g': return 'layers';
+      case 'proteins_100g': return 'barbell';
+      default: return 'help-circle';
+    }
+  };
+
+  const getNutrientIconColor = (nutrientKey: string): string => {
+    switch (nutrientKey) {
+      case 'energy_kcal_100g': return '#FFA07A'; // LightSalmon (Arancione chiaro)
+      case 'fat_100g': return '#87CEEB';       // SkyBlue (Blu cielo)
+      case 'carbohydrates_100g': return '#FFD700'; // Gold (Giallo oro)
+      case 'proteins_100g': return '#CD5C5C';   // IndianRed (Rosso mattone chiaro)
+      default: return BORDER_COLOR;
+    }
+  };
+
+  const formatNutritionValue = (value: number, unit: string): string => {
+    if (unit === 'kcal') {
+      return `${Math.round(value)} ${unit}`;
+    }
+    return `${Math.round(value)}${unit}`;
+  };
+
+  // getHealthScoreColor rimossa - ora si usa getScoreColor globale
+
+  const getHealthScoreCategory = (score: number | undefined | null): 'eccellente' | 'ottimo' | 'buono' | 'discreto' | 'scarso' => {
+    if (score === undefined || score === null) return 'scarso';
+    if (score >= 91) return 'eccellente';
+    if (score >= 61) return 'ottimo';
+    if (score >= 41) return 'buono';
+    if (score >= 21) return 'discreto';
+    return 'scarso';
+  };
+
+  const getFilteredProducts = () => {
+    if (healthFilter === 'all') return recentProducts;
+    return recentProducts.filter(product => {
+      const category = getHealthScoreCategory(product.health_score);
+      return category === healthFilter;
+    });
   };
 
   const determineEntryType = (product: ProductRecord): 'barcode' | 'photo_packaged' | 'photo_meal' => {
@@ -143,21 +185,23 @@ export default function SelectProductForDayScreen({ navigation, route }: Props) 
   const handleQuantityConfirm = () => {
     if (!selectedProduct) return;
     
-    const quantityNum = parseFloat(quantity);
-    if (isNaN(quantityNum) || quantityNum <= 0) {
+    if (quantity <= 0) {
       Alert.alert('Errore', 'Inserisci una quantità valida');
       return;
     }
 
     setShowQuantityModal(false);
     const entryType = determineEntryType(selectedProduct);
-    addProductToLog(selectedProduct, entryType, quantityNum);
+    addProductToLog(selectedProduct, entryType, quantity);
   };
 
   const renderProduct = (product: ProductRecord) => {
     const entryType = determineEntryType(product);
     const isPhotoMeal = entryType === 'photo_meal';
     const showNutrition = entriesNutritionVisibility[product.id];
+    
+    // Determina il colore della card basato sul punteggio salute
+    const cardColor = product.health_score !== undefined ? getScoreColor(product.health_score) : '#000000';
     
     // Per i prodotti photo_meal, estrai i valori dal breakdown
     // Per i prodotti photo_packaged, usa i valori stimati per 100g
@@ -192,140 +236,249 @@ export default function SelectProductForDayScreen({ navigation, route }: Props) 
     }
     
     return (
-      <View key={product.id} style={{ marginBottom: 40 }}>
-        {/* Card principale */}
-        <View style={styles.entryCardWrapper}>
-          <View style={styles.entryCardShadow} />
+      <View key={product.id}>
+        {/* Card unificata */}
+        <View style={showNutrition ? styles.entryCardWrapperExpanded : styles.entryCardWrapper}>
+          <View style={[styles.entryCardShadow, { backgroundColor: cardColor }]} />
           <TouchableOpacity 
-            style={styles.entryCardContainer}
-            onPress={() => {/* Eventuale navigazione al dettaglio */}}
-            activeOpacity={0.8}
+            style={[
+              styles.entryCardContainer,
+              { borderColor: cardColor },
+              showNutrition && styles.entryCardContainerExpanded
+            ]}
+            onPress={() => toggleNutritionVisibility(product.id)}
+            activeOpacity={1}
           >
-            {/* Prima riga: Immagine, Nome, Marchio, Punteggio */}
+            {/* Prima riga: Immagine, Nome, Marchio, Punteggio + Icone azioni se espansa */}
             <View style={styles.entryFirstRow}>
               <View style={styles.entryImageWrapper}>
-                <View style={styles.entryImageShadow} />
+                <View style={[styles.entryImageShadow, { backgroundColor: cardColor }]} />
                 {product.product_image ? (
                   <Image 
                     source={{ uri: product.product_image }} 
-                    style={styles.entryImage} 
+                    style={[styles.entryImage, { borderColor: cardColor }]} 
                   />
                 ) : (
-                  <View style={styles.entryImagePlaceholder}>
+                  <View style={[styles.entryImagePlaceholder, { borderColor: cardColor }]}>
                     <Ionicons name="image-outline" size={24} color="#666666" />
                   </View>
                 )}
               </View>
               
               <View style={styles.entryInfo}>
-                <Text style={styles.entryName} numberOfLines={2} ellipsizeMode="tail">
+                <Text style={styles.entryName} numberOfLines={2} ellipsizeMode="tail" allowFontScaling={false}>
                   {product.product_name}
                 </Text>
-                {product.brand && (
-                  <Text style={styles.entryBrand} numberOfLines={1} ellipsizeMode="tail">
-                    {product.brand}
-                  </Text>
-                )}
                 
-                {/* Punteggio salute con cuore */}
+                {/* Punteggio salute con pulsante colorato */}
                 <View style={styles.entryScoreContainer}>
-                  <Ionicons 
-                    name="heart" 
-                    size={18} 
-                    color={getHealthScoreColor(product.health_score)} 
-                    style={styles.entryScoreIcon} 
-                  />
-                  <Text style={styles.entryScoreValue}>
-                    {product.health_score || '--'}
-                  </Text>
+                  <View style={[styles.scoreButton, { backgroundColor: getScoreColor(product.health_score) }]}>
+                    <Ionicons name="heart" size={14} color="#FFFFFF" />
+                    <Text style={styles.scoreButtonText}>
+                      {product.health_score || '--'}
+                    </Text>
+                  </View>
                 </View>
               </View>
+
+              {/* Icone azioni - Visibili solo quando la card è espansa */}
+              {showNutrition && (
+                <View style={styles.cardActionsHeader}>
+                  <TouchableOpacity 
+                    style={styles.headerActionButton}
+                    onPress={() => {
+                      navigation.navigate('ProductDetail', {
+                        productRecordId: product.id,
+                        openedFromDiary: true
+                      });
+                    }}
+                  >
+                    <Ionicons name="eye" size={22} color="#666666" />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity 
+                    style={styles.addButton}
+                    onPress={() => handleProductSelect(product)}
+                  >
+                    <Ionicons name="add" size={20} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
+
+            {/* Seconda riga: Valori nutrizionali (se espansi) */}
+            {showNutrition && (
+                                <View style={styles.nutritionRowContainer}>
+
+
+                    {/* Grid 2x2 con i valori nutrizionali */}
+                    <View style={styles.nutritionGridContainer}>
+                  {/* Calorie */}
+                  <View style={styles.nutritionItemWrapper}>
+                    <View style={styles.nutritionItemContent}>
+                      <View style={[
+                        styles.nutritionIconContainer,
+                        { backgroundColor: getNutrientIconColor('energy_kcal_100g') }
+                      ]}>
+                        <Ionicons 
+                          name={getNutrientIconName('energy_kcal_100g') as any} 
+                          size={22} 
+                          color="#000000" 
+                        />
+                      </View>
+                      
+                      <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                        {formatNutritionValue(nutritionValues.kcal, 'kcal')}
+                      </Text>
+                      
+                      <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                        Energia
+                      </Text>
+                      
+                      <View style={styles.nutritionProgressContainer}>
+                        <View style={[
+                          styles.nutritionProgressFill,
+                          { 
+                            width: `${Math.min((nutritionValues.kcal / 900) * 100, 100)}%`,
+                            backgroundColor: getNutrientIconColor('energy_kcal_100g')
+                          }
+                        ]} />
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Proteine */}
+                  <View style={styles.nutritionItemWrapper}>
+                    <View style={styles.nutritionItemContent}>
+                      <View style={[
+                        styles.nutritionIconContainer,
+                        { backgroundColor: getNutrientIconColor('proteins_100g') }
+                      ]}>
+                        <Ionicons 
+                          name={getNutrientIconName('proteins_100g') as any} 
+                          size={22} 
+                          color="#000000" 
+                        />
+                      </View>
+                      
+                      <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                        {formatNutritionValue(nutritionValues.proteins, 'g')}
+                      </Text>
+                      
+                      <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                        Proteine
+                      </Text>
+                      
+                      <View style={styles.nutritionProgressContainer}>
+                        <View style={[
+                          styles.nutritionProgressFill,
+                          { 
+                            width: `${Math.min((nutritionValues.proteins / 50) * 100, 100)}%`,
+                            backgroundColor: getNutrientIconColor('proteins_100g')
+                          }
+                        ]} />
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Carboidrati */}
+                  <View style={styles.nutritionItemWrapper}>
+                    <View style={styles.nutritionItemContent}>
+                      <View style={[
+                        styles.nutritionIconContainer,
+                        { backgroundColor: getNutrientIconColor('carbohydrates_100g') }
+                      ]}>
+                        <Ionicons 
+                          name={getNutrientIconName('carbohydrates_100g') as any} 
+                          size={22} 
+                          color="#000000" 
+                        />
+                      </View>
+                      
+                      <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                        {formatNutritionValue(nutritionValues.carbs, 'g')}
+                      </Text>
+                      
+                      <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                        Carboidrati
+                      </Text>
+                      
+                      <View style={styles.nutritionProgressContainer}>
+                        <View style={[
+                          styles.nutritionProgressFill,
+                          { 
+                            width: `${Math.min((nutritionValues.carbs / 100) * 100, 100)}%`,
+                            backgroundColor: getNutrientIconColor('carbohydrates_100g')
+                          }
+                        ]} />
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Grassi */}
+                  <View style={styles.nutritionItemWrapper}>
+                    <View style={styles.nutritionItemContent}>
+                      <View style={[
+                        styles.nutritionIconContainer,
+                        { backgroundColor: getNutrientIconColor('fat_100g') }
+                      ]}>
+                        <Ionicons 
+                          name={getNutrientIconName('fat_100g') as any} 
+                          size={22} 
+                          color="#000000" 
+                        />
+                      </View>
+                      
+                      <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                        {formatNutritionValue(nutritionValues.fats, 'g')}
+                      </Text>
+                      
+                      <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                        Grassi
+                      </Text>
+                      
+                      <View style={styles.nutritionProgressContainer}>
+                        <View style={[
+                          styles.nutritionProgressFill,
+                          { 
+                            width: `${Math.min((nutritionValues.fats / 50) * 100, 100)}%`,
+                            backgroundColor: getNutrientIconColor('fat_100g')
+                          }
+                        ]} />
+                      </View>
+                    </View>
+                  </View>
+                </View>
+
+                                {/* Descrizione sotto i valori nutrizionali */}
+                <View style={[
+                  styles.nutritionInfoContainer,
+                  {
+                    backgroundColor: product.health_score !== undefined 
+                      ? `${getScoreColor(product.health_score)}15` 
+                      : '#F8F8F8',
+                    borderColor: product.health_score !== undefined 
+                      ? `${getScoreColor(product.health_score)}40` 
+                      : '#E5E5E5',
+                  }
+                ]}>
+                  <Text style={styles.nutritionInfoText} allowFontScaling={false}>
+                     {entryType === 'photo_meal' 
+                       ? (
+                           <Text>
+                             Valori stimati per il <Text style={styles.boldText}>pasto</Text> fotografato
+                           </Text>
+                         )
+                       : 'Valori nutrizionali per 100g di prodotto'
+                     }
+                   </Text>
+                </View>
+
+              </View>
+            )}
           </TouchableOpacity>
         </View>
-        
-        {/* Valori nutrizionali espandibili - SOPRA i pulsanti */}
-        {showNutrition && (
-          <View style={styles.nutritionExpandedContainer}>
-            <View style={styles.entryNutrition}>
-              <View style={styles.nutritionItem}>
-                <View style={[styles.nutritionIconCircle, { backgroundColor: '#FFA07A' }]}>
-                  <Ionicons name="flame" size={16} color="#000000" />
-                </View>
-                <Text style={styles.nutritionLabel}>Calorie</Text>
-                <Text style={styles.nutritionValue}>
-                  {Math.round(nutritionValues.kcal)}
-                </Text>
-              </View>
-              <View style={styles.nutritionItem}>
-                <View style={[styles.nutritionIconCircle, { backgroundColor: '#CD5C5C' }]}>
-                  <Ionicons name="barbell" size={16} color="#000000" />
-                </View>
-                <Text style={styles.nutritionLabel}>Proteine</Text>
-                <Text style={styles.nutritionValue}>
-                  {Math.round(nutritionValues.proteins)}g
-                </Text>
-              </View>
-              <View style={styles.nutritionItem}>
-                <View style={[styles.nutritionIconCircle, { backgroundColor: '#FFD700' }]}>
-                  <Ionicons name="layers" size={16} color="#000000" />
-                </View>
-                <Text style={styles.nutritionLabel}>Carboidrati</Text>
-                <Text style={styles.nutritionValue}>
-                  {Math.round(nutritionValues.carbs)}g
-                </Text>
-              </View>
-              <View style={styles.nutritionItem}>
-                <View style={[styles.nutritionIconCircle, { backgroundColor: '#87CEEB' }]}>
-                  <Ionicons name="cafe" size={16} color="#000000" />
-                </View>
-                <Text style={styles.nutritionLabel}>Grassi</Text>
-                <Text style={styles.nutritionValue}>
-                  {Math.round(nutritionValues.fats)}g
-                </Text>
-              </View>
-            </View>
-            
-            {/* Descrizione della porzione */}
-            {!isPhotoMeal && (
-              <Text style={styles.portionDescription}>
-                (Prodotto confezionato, valori per 100g)
-              </Text>
-            )}
-            {isPhotoMeal && (
-              <Text style={styles.portionDescription}>
-                (Pasto fotografato, valori stimati)
-              </Text>
-            )}
-          </View>
-        )}
-        
-        {/* Pulsanti tratteggiati - SOTTO i valori nutrizionali */}
-        <View style={[styles.cardButtonsContainer, { marginTop: showNutrition ? 12 : -8 }]}>
-          <TouchableOpacity
-            style={[styles.dashedButton, styles.dashedButtonNutrition]}
-            onPress={() => toggleNutritionVisibility(product.id)}
-          >
-            <Ionicons 
-              name={showNutrition ? "chevron-up" : "chevron-down"} 
-              size={20} 
-              color={PRIMARY_GREEN} 
-            />
-            <Text style={[styles.dashedButtonText, styles.dashedButtonTextNutrition]}>
-              {showNutrition ? 'Nascondi' : 'Mostra'} Valori
-            </Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity
-            style={[styles.dashedButton, styles.dashedButtonAdd]}
-            onPress={() => handleProductSelect(product)}
-          >
-            <Ionicons name="add" size={18} color="#4ECDC4" />
-            <Text style={[styles.dashedButtonText, styles.dashedButtonTextAdd]}>
-              {isPhotoMeal ? 'Aggiungi' : 'Aggiungi'}
-            </Text>
-          </TouchableOpacity>
-        </View>
+
       </View>
     );
   };
@@ -337,106 +490,111 @@ export default function SelectProductForDayScreen({ navigation, route }: Props) 
       animationType="slide"
       onRequestClose={() => setShowQuantityModal(false)}
     >
-      <View style={styles.modalOverlay}>
-        <View style={styles.modalWrapper}>
-          <View style={styles.modalShadow} />
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Inserisci Quantità</Text>
-              <TouchableOpacity
-                onPress={() => setShowQuantityModal(false)}
-                style={styles.modalCloseButton}
-              >
-                <Ionicons name="close" size={24} color="#666666" />
-              </TouchableOpacity>
+      <View style={styles.pickerModalOverlay}>
+        <View style={styles.pickerModalContent}>
+          <View style={styles.pickerModalHeader}>
+            <TouchableOpacity onPress={() => setShowQuantityModal(false)}>
+              <Text style={styles.pickerModalCancelText} allowFontScaling={false}>Annulla</Text>
+            </TouchableOpacity>
+            <Text style={styles.pickerModalTitle} allowFontScaling={false}>Seleziona Quantità</Text>
+            <TouchableOpacity onPress={handleQuantityConfirm} disabled={adding}>
+              <Text style={[styles.pickerModalDoneText, adding && styles.pickerModalDoneTextDisabled]} allowFontScaling={false}>
+                {adding ? 'Aggiungendo...' : 'Aggiungi'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          
+          {selectedProduct && (
+            <View style={styles.pickerProductInfo}>
+              <Text style={styles.pickerProductName} allowFontScaling={false}>{selectedProduct.product_name}</Text>
+              {selectedProduct.brand && (
+                <Text style={styles.pickerProductBrand} allowFontScaling={false}>{selectedProduct.brand}</Text>
+              )}
             </View>
+          )}
 
-            {selectedProduct && (
-              <View style={styles.modalProductInfo}>
-                <Text style={styles.modalProductName}>{selectedProduct.product_name}</Text>
-                {selectedProduct.brand && (
-                  <Text style={styles.modalProductBrand}>{selectedProduct.brand}</Text>
-                )}
+          {/* Sezione grigia che si estende fino al bottom */}
+          <View style={styles.pickerBottomSection}>
+            {Platform.OS === 'ios' ? (
+              <Picker
+                selectedValue={quantity}
+                onValueChange={(value) => setQuantity(value)}
+                style={styles.quantityPicker}
+                itemStyle={styles.quantityPickerItem}
+              >
+                {Array.from({ length: 191 }, (_, i) => i + 10).map(weight => (
+                  <Picker.Item 
+                    key={weight} 
+                    label={`${weight} g`} 
+                    value={weight}
+                    color={BORDER_COLOR}
+                  />
+                ))}
+              </Picker>
+            ) : (
+              <View style={styles.androidPickerContainer}>
+                <FlatList
+                  data={Array.from({ length: 191 }, (_, i) => i + 10)}
+                  keyExtractor={(item) => item.toString()}
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.androidPickerContent}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={[
+                        styles.androidPickerItem,
+                        quantity === item && styles.androidPickerItemSelected
+                      ]}
+                      onPress={() => setQuantity(item)}
+                    >
+                      <Text style={[
+                        styles.androidPickerText,
+                        quantity === item && styles.androidPickerTextSelected
+                      ]} allowFontScaling={false}>
+                        {item} g
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                  getItemLayout={(data, index) => ({
+                    length: 44,
+                    offset: 44 * index,
+                    index,
+                  })}
+                  initialScrollIndex={Math.max(0, quantity - 10)}
+                />
               </View>
             )}
 
-            <View style={styles.quantityInputContainer}>
-              <Text style={styles.quantityLabel}>Quantità (grammi)</Text>
-              <View style={styles.quantityInputWrapper}>
-                <View style={styles.quantityInputShadow} />
-                <View style={styles.quantityInputField}>
-                  <TextInput
-                    style={styles.quantityInput}
-                    value={quantity}
-                    onChangeText={setQuantity}
-                    keyboardType="numeric"
-                    placeholder="100"
-                    autoFocus
-                  />
-                  <Text style={styles.quantityUnit}>g</Text>
-                </View>
-              </View>
-            </View>
-
             {selectedProduct && (
-              <View style={styles.nutritionPreviewWrapper}>
-                <View style={styles.nutritionPreviewShadow} />
-                <View style={styles.nutritionPreview}>
-                  <Text style={styles.nutritionPreviewTitle}>Valori nutrizionali per {quantity}g:</Text>
-                  <View style={styles.nutritionPreviewGrid}>
-                    <View style={styles.nutritionPreviewItem}>
-                      <Text style={styles.nutritionPreviewValue}>
-                        {Math.round((selectedProduct.estimated_energy_kcal_100g || selectedProduct.energy_kcal_100g || 0) * (parseFloat(quantity) || 0) / 100)}
-                      </Text>
-                      <Text style={styles.nutritionPreviewLabel}>kcal</Text>
-                    </View>
-                    <View style={styles.nutritionPreviewItem}>
-                      <Text style={styles.nutritionPreviewValue}>
-                        {Math.round((selectedProduct.estimated_proteins_100g || selectedProduct.proteins_100g || 0) * (parseFloat(quantity) || 0) / 100)}g
-                      </Text>
-                      <Text style={styles.nutritionPreviewLabel}>proteine</Text>
-                    </View>
-                    <View style={styles.nutritionPreviewItem}>
-                      <Text style={styles.nutritionPreviewValue}>
-                        {Math.round((selectedProduct.estimated_carbs_100g || selectedProduct.carbohydrates_100g || 0) * (parseFloat(quantity) || 0) / 100)}g
-                      </Text>
-                      <Text style={styles.nutritionPreviewLabel}>carb</Text>
-                    </View>
-                    <View style={styles.nutritionPreviewItem}>
-                      <Text style={styles.nutritionPreviewValue}>
-                        {Math.round((selectedProduct.estimated_fats_100g || selectedProduct.fat_100g || 0) * (parseFloat(quantity) || 0) / 100)}g
-                      </Text>
-                      <Text style={styles.nutritionPreviewLabel}>grassi</Text>
-                    </View>
+              <View style={styles.pickerNutritionPreview}>
+                <Text style={styles.pickerNutritionTitle} allowFontScaling={false}>Valori per {quantity}g:</Text>
+                <View style={styles.pickerNutritionGrid}>
+                  <View style={styles.pickerNutritionItem}>
+                    <Text style={styles.pickerNutritionValue} allowFontScaling={false}>
+                      {Math.round((selectedProduct.estimated_energy_kcal_100g || selectedProduct.energy_kcal_100g || 0) * quantity / 100)}
+                    </Text>
+                    <Text style={styles.pickerNutritionLabel} allowFontScaling={false}>kcal</Text>
+                  </View>
+                  <View style={styles.pickerNutritionItem}>
+                    <Text style={styles.pickerNutritionValue} allowFontScaling={false}>
+                      {Math.round((selectedProduct.estimated_proteins_100g || selectedProduct.proteins_100g || 0) * quantity / 100)}g
+                    </Text>
+                    <Text style={styles.pickerNutritionLabel} allowFontScaling={false}>proteine</Text>
+                  </View>
+                  <View style={styles.pickerNutritionItem}>
+                    <Text style={styles.pickerNutritionValue} allowFontScaling={false}>
+                      {Math.round((selectedProduct.estimated_carbs_100g || selectedProduct.carbohydrates_100g || 0) * quantity / 100)}g
+                    </Text>
+                    <Text style={styles.pickerNutritionLabel} allowFontScaling={false}>carb</Text>
+                  </View>
+                  <View style={styles.pickerNutritionItem}>
+                    <Text style={styles.pickerNutritionValue} allowFontScaling={false}>
+                      {Math.round((selectedProduct.estimated_fats_100g || selectedProduct.fat_100g || 0) * quantity / 100)}g
+                    </Text>
+                    <Text style={styles.pickerNutritionLabel} allowFontScaling={false}>grassi</Text>
                   </View>
                 </View>
               </View>
             )}
-
-            <View style={styles.modalButtons}>
-              <View style={styles.cancelButtonWrapper}>
-                <View style={styles.cancelButtonShadow} />
-                <TouchableOpacity
-                  style={styles.cancelButton}
-                  onPress={() => setShowQuantityModal(false)}
-                >
-                  <Text style={styles.cancelButtonText}>Annulla</Text>
-                </TouchableOpacity>
-              </View>
-              
-              <View style={styles.confirmButtonWrapper}>
-                <View style={styles.confirmButtonShadow} />
-                <TouchableOpacity
-                  style={[styles.confirmButton, adding && styles.confirmButtonDisabled]}
-                  onPress={handleQuantityConfirm}
-                  disabled={adding}
-                >
-                  <Text style={styles.confirmButtonText}>
-                    {adding ? 'Aggiungendo...' : 'Aggiungi'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
           </View>
         </View>
       </View>
@@ -447,7 +605,7 @@ export default function SelectProductForDayScreen({ navigation, route }: Props) 
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Caricamento prodotti...</Text>
+          <Text style={styles.loadingText} allowFontScaling={false}>Caricamento prodotti...</Text>
         </View>
       </SafeAreaView>
     );
@@ -472,8 +630,8 @@ export default function SelectProductForDayScreen({ navigation, route }: Props) 
 
         {/* Titolo sotto l'header - DENTRO lo scroll */}
         <View style={styles.titleContainer}>
-          <Text style={styles.pageTitle}>Aggiungi al Diario</Text>
-          <Text style={styles.pageSubtitle}>
+          <Text style={styles.pageTitle} allowFontScaling={false}>Aggiungi al Diario</Text>
+          <Text style={styles.pageSubtitle} allowFontScaling={false}>
             per {new Date(selectedDate).toLocaleDateString('it', {
               weekday: 'long',
               day: 'numeric',
@@ -482,56 +640,167 @@ export default function SelectProductForDayScreen({ navigation, route }: Props) 
           </Text>
         </View>
 
-        {/* Sistema di navigazione tab - DENTRO lo scroll */}
-        <View style={styles.tabContainer}>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'recent' && styles.activeTab]}
-            onPress={() => setActiveTab('recent')}
-          >
-            <Text style={[styles.tabText, activeTab === 'recent' && styles.activeTabText]}>
-              I Tuoi Recenti
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'saved' && styles.activeTab]}
-            onPress={() => setActiveTab('saved')}
-          >
-            <Text style={[styles.tabText, activeTab === 'saved' && styles.activeTabText]}>
-              Salvati
-            </Text>
-          </TouchableOpacity>
+        {/* Pulsanti di azione rapida - Uno per riga con stile app */}
+        <View style={styles.quickActionsContainer}>
+          <View style={styles.quickActionWrapper}>
+            <View style={[styles.quickActionShadow, { backgroundColor: '#4A90E2' }]} />
+            <TouchableOpacity
+              style={[styles.quickActionButton, { borderColor: '#4A90E2' }]}
+              onPress={() => navigation.navigate('MainTabs', { screen: 'Scanner' })}
+              activeOpacity={1}
+            >
+              <View style={styles.quickActionContent}>
+                <View style={styles.quickActionIconContainer}>
+                  <Ionicons name="qr-code" size={24} color={BORDER_COLOR} />
+                </View>
+                <View style={styles.quickActionTextContainer}>
+                  <Text style={styles.quickActionTitle} allowFontScaling={false}>Scansiona Codice a Barre</Text>
+                  <Text style={styles.quickActionSubtitle} allowFontScaling={false}>Trova prodotti dal barcode</Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#666666" />
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.quickActionWrapper}>
+            <View style={[styles.quickActionShadow, { backgroundColor: '#50C878' }]} />
+            <TouchableOpacity
+              style={[styles.quickActionButton, { borderColor: '#50C878' }]}
+              onPress={() => navigation.navigate('MainTabs', { screen: 'Foto' })}
+              activeOpacity={1}
+            >
+              <View style={styles.quickActionContent}>
+                <View style={styles.quickActionIconContainer}>
+                  <Ionicons name="camera" size={24} color={BORDER_COLOR} />
+                </View>
+                <View style={styles.quickActionTextContainer}>
+                  <Text style={styles.quickActionTitle} allowFontScaling={false}>Analizza con Foto</Text>
+                  <Text style={styles.quickActionSubtitle} allowFontScaling={false}>Scatta e analizza il cibo</Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#666666" />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Menu tab e filtri - Design pulito e moderno */}
+        <View style={styles.filtersContainer}>
+          {/* Tab semplici */}
+          <View style={styles.simpleTabsContainer}>
+            <TouchableOpacity
+              style={[styles.simpleTab, activeTab === 'recent' && styles.simpleTabActive]}
+              onPress={() => setActiveTab('recent')}
+              activeOpacity={1}
+            >
+              <Text style={[styles.simpleTabText, activeTab === 'recent' && styles.simpleTabTextActive]} allowFontScaling={false}>
+                Recenti
+              </Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[styles.simpleTab, activeTab === 'saved' && styles.simpleTabActive]}
+              onPress={() => setActiveTab('saved')}
+              activeOpacity={1}
+            >
+              <Text style={[styles.simpleTabText, activeTab === 'saved' && styles.simpleTabTextActive]} allowFontScaling={false}>
+                Salvati
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Filtri punteggio salute */}
+          <View style={styles.healthFiltersContainer}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.healthFiltersScroll}>
+              <TouchableOpacity
+                style={[styles.healthFilter, healthFilter === 'all' && styles.healthFilterActive]}
+                onPress={() => setHealthFilter('all')}
+              >
+                <Text style={[styles.healthFilterText, healthFilter === 'all' && styles.healthFilterTextActive]} allowFontScaling={false}>
+                  Tutti
+                </Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.healthFilter, healthFilter === 'eccellente' && styles.healthFilterActive]}
+                onPress={() => setHealthFilter('eccellente')}
+              >
+                <Ionicons name="heart" size={16} color={healthFilter === 'eccellente' ? '#FFFFFF' : '#4A90E2'} />
+                <Text style={[styles.healthFilterText, healthFilter === 'eccellente' && styles.healthFilterTextActive]} allowFontScaling={false}>
+                  Eccellente
+                </Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.healthFilter, healthFilter === 'ottimo' && styles.healthFilterActive]}
+                onPress={() => setHealthFilter('ottimo')}
+              >
+                <Ionicons name="heart" size={16} color={healthFilter === 'ottimo' ? '#FFFFFF' : '#1E8F4E'} />
+                <Text style={[styles.healthFilterText, healthFilter === 'ottimo' && styles.healthFilterTextActive]} allowFontScaling={false}>
+                  Ottimo
+                </Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.healthFilter, healthFilter === 'buono' && styles.healthFilterActive]}
+                onPress={() => setHealthFilter('buono')}
+              >
+                <Ionicons name="heart" size={16} color={healthFilter === 'buono' ? '#FFFFFF' : '#7AC547'} />
+                <Text style={[styles.healthFilterText, healthFilter === 'buono' && styles.healthFilterTextActive]} allowFontScaling={false}>
+                  Buono
+                </Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.healthFilter, healthFilter === 'discreto' && styles.healthFilterActive]}
+                onPress={() => setHealthFilter('discreto')}
+              >
+                <Ionicons name="heart" size={16} color={healthFilter === 'discreto' ? '#FFFFFF' : '#E6A500'} />
+                <Text style={[styles.healthFilterText, healthFilter === 'discreto' && styles.healthFilterTextActive]} allowFontScaling={false}>
+                  Discreto
+                </Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[styles.healthFilter, healthFilter === 'scarso' && styles.healthFilterActive]}
+                onPress={() => setHealthFilter('scarso')}
+              >
+                <Ionicons name="heart" size={16} color={healthFilter === 'scarso' ? '#FFFFFF' : '#FF0000'} />
+                <Text style={[styles.healthFilterText, healthFilter === 'scarso' && styles.healthFilterTextActive]} allowFontScaling={false}>
+                  Scarso
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
         </View>
 
         {/* Contenuto che cambia in base al tab */}
         {activeTab === 'recent' ? (
-          recentProducts.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="scan-outline" size={64} color="#CCCCCC" />
-              <Text style={styles.emptyStateTitle}>Nessun prodotto recente</Text>
-              <Text style={styles.emptyStateDescription}>
-                Scansiona alcuni prodotti per vederli qui e aggiungerli rapidamente al tuo diario
-              </Text>
-              <View style={styles.scanButtonWrapper}>
-                <View style={styles.scanButtonShadow} />
-                <TouchableOpacity
-                  style={styles.scanButton}
-                  onPress={() => navigation.navigate('Foto')}
-                >
-                  <Ionicons name="camera" size={20} color="#FFFFFF" />
-                  <Text style={styles.scanButtonText}>Scansiona Prodotto</Text>
-                </TouchableOpacity>
+          (() => {
+            const filteredProducts = getFilteredProducts();
+            return filteredProducts.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="time-outline" size={64} color="#CCCCCC" />
+                <Text style={styles.emptyStateTitle} allowFontScaling={false}>
+                  {healthFilter === 'all' ? 'Nessun prodotto recente' : 'Nessun prodotto trovato'}
+                </Text>
+                <Text style={styles.emptyStateDescription} allowFontScaling={false}>
+                  {healthFilter === 'all' 
+                    ? 'I prodotti che analizzi appariranno qui per un accesso rapido al tuo diario'
+                    : 'Nessun prodotto corrisponde al filtro selezionato'
+                  }
+                </Text>
               </View>
-            </View>
-          ) : (
-            <View style={styles.productsContainer}>
-              {recentProducts.map(renderProduct)}
-            </View>
-          )
+            ) : (
+              <View style={styles.productsContainer}>
+                {filteredProducts.map(renderProduct)}
+              </View>
+            );
+          })()
         ) : (
           <View style={styles.emptyState}>
             <Ionicons name="bookmark-outline" size={64} color="#CCCCCC" />
-            <Text style={styles.emptyStateTitle}>Nessun prodotto salvato</Text>
-            <Text style={styles.emptyStateDescription}>
+            <Text style={styles.emptyStateTitle} allowFontScaling={false}>Nessun prodotto salvato</Text>
+            <Text style={styles.emptyStateDescription} allowFontScaling={false}>
               I prodotti che salverai appariranno qui per un accesso rapido
             </Text>
           </View>
@@ -576,41 +845,143 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   pageTitle: {
-    fontSize: 24,
+    fontSize: scaleFont(24),
     fontFamily: 'BricolageGrotesque-Bold',
     color: BORDER_COLOR,
   },
   pageSubtitle: {
-    fontSize: 16,
+    fontSize: scaleFont(16),
     fontFamily: 'BricolageGrotesque-Regular',
     color: '#666666',
   },
-  tabContainer: {
-    flexDirection: 'row',
-    marginHorizontal: 16,
-    gap: 8,
-    marginBottom: 20,
+  // Nuovo design filtri e tab
+  filtersContainer: {
+    marginHorizontal: 20,
+    marginBottom: 16, // Ridotto da 28 a 16 per uniformare
   },
-  tab: {
-    flex: 1,
+  simpleTabsContainer: {
+    flexDirection: 'row',
+    marginBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  simpleTab: {
+    flex: 1, // Occupa metà dello spazio disponibile
     paddingVertical: 12,
     paddingHorizontal: 16,
-    borderWidth: 2,
-    borderColor: '#4ECDC4',
-    borderRadius: 12,
-    alignItems: 'center',
-    backgroundColor: 'transparent',
+    alignItems: 'center', // Centra il testo
   },
-  activeTab: {
-    backgroundColor: '#4ECDC4',
+  simpleTabActive: {
+    borderBottomWidth: 2,
+    borderBottomColor: PRIMARY_GREEN,
+    marginBottom: -1, // Sovrappone la riga grigia
   },
-  tabText: {
-    fontSize: 14,
+  simpleTabText: {
+    fontSize: scaleFont(16),
+    fontFamily: 'BricolageGrotesque-Medium',
+    color: '#666666',
+  },
+  simpleTabTextActive: {
+    color: PRIMARY_GREEN,
     fontFamily: 'BricolageGrotesque-SemiBold',
-    color: '#4ECDC4',
   },
-  activeTabText: {
+  healthFiltersContainer: {
+    marginTop: 8,
+    marginBottom: 0, // Ridotto spacing verso le card
+  },
+  filtersLabel: {
+    fontSize: scaleFont(14),
+    fontFamily: 'BricolageGrotesque-Medium',
+    color: '#666666',
+    marginBottom: 12,
+  },
+  healthFiltersScroll: {
+    paddingRight: 20,
+  },
+  healthFilter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginRight: 8,
+    borderRadius: 20,
+    backgroundColor: '#F5F5F5',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    gap: 6,
+  },
+  healthFilterActive: {
+    backgroundColor: PRIMARY_GREEN,
+    borderColor: PRIMARY_GREEN,
+  },
+  healthFilterText: {
+    fontSize: scaleFont(13),
+    fontFamily: 'BricolageGrotesque-Medium',
+    color: '#666666',
+  },
+  healthFilterTextActive: {
     color: '#FFFFFF',
+    fontFamily: 'BricolageGrotesque-SemiBold',
+  },
+  quickActionsContainer: {
+    marginHorizontal: 16,
+    marginBottom: 32,
+    paddingHorizontal: 4,
+  },
+  quickActionWrapper: {
+    position: 'relative',
+    marginBottom: 16,
+  },
+  quickActionShadow: {
+    position: 'absolute',
+    top: SHADOW_OFFSET_VALUE,
+    left: SHADOW_OFFSET_VALUE,
+    width: '100%',
+    height: '100%',
+    backgroundColor: BORDER_COLOR,
+    borderRadius: CARD_BORDER_RADIUS,
+    zIndex: 0,
+  },
+  quickActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: CARD_BACKGROUND_COLOR,
+    borderRadius: CARD_BORDER_RADIUS,
+    borderWidth: CARD_BORDER_WIDTH,
+    borderColor: BORDER_COLOR,
+    padding: 20,
+    position: 'relative',
+    zIndex: 1,
+  },
+  quickActionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  quickActionIconContainer: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#F8F4EC',
+    borderWidth: CARD_BORDER_WIDTH,
+    borderColor: BORDER_COLOR,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  quickActionTextContainer: {
+    flex: 1,
+  },
+  quickActionTitle: {
+    fontSize: scaleFont(16),
+    fontFamily: 'BricolageGrotesque-SemiBold',
+    color: BORDER_COLOR,
+    marginBottom: 4,
+  },
+  quickActionSubtitle: {
+    fontSize: scaleFont(14),
+    fontFamily: 'BricolageGrotesque-Regular',
+    color: '#666666',
   },
   scrollContainer: {
     flex: 1,
@@ -625,7 +996,11 @@ const styles = StyleSheet.create({
   // Entry Card Styles (dal CalorieTrackingScreen)
   entryCardWrapper: {
     position: 'relative',
-    marginBottom: 24,
+    marginBottom: 24, // Aumentato leggermente da 20 a 24
+  },
+  entryCardWrapperExpanded: {
+    position: 'relative',
+    marginBottom: 28, // Ridotto da 40 a 28 per meno spazio
   },
   entryCardShadow: {
     backgroundColor: 'black',
@@ -640,19 +1015,25 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    paddingTop: 24,
-    paddingBottom: 15,
-    paddingHorizontal: 18,
+    padding: 18, // Semplificato il padding come nel HomeScreen
     position: 'relative',
     zIndex: 1,
     borderWidth: 1.5,
     borderColor: '#000000',
-    minHeight: 150,
+    height: 150, // Altezza fissa come nel HomeScreen invece di minHeight
+    justifyContent: 'flex-start', // Sempre flex-start per posizione fissa
+  },
+  entryCardContainerExpanded: {
+    height: 'auto', // Altezza automatica quando espansa
+    justifyContent: 'flex-start', // Sempre flex-start per posizione fissa
+    padding: 18, // Stesso padding per evitare spostamenti
+    paddingBottom: 15, // Padding bottom diverso per il contenuto espanso
   },
   entryFirstRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
+    alignItems: 'center', // Manteniamo questo per allineare immagine e contenuto
+    marginTop: 4.5, // Margine top fisso per centrare nella card chiusa
+    marginBottom: 0, // Ridotto da 12 a 0 per centratura perfetta
   },
   entryImageWrapper: {
     position: 'relative',
@@ -697,8 +1078,33 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingLeft: 5,
   },
+  expandIndicator: {
+    paddingLeft: 12,
+    justifyContent: 'center',
+  },
+  expandIndicatorBottom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -25,
+    marginBottom: 14,
+  },
+  expandIndicatorLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E0E0E0',
+    marginHorizontal: 8,
+  },
+  expandIndicatorIconContainer: {
+    backgroundColor: '#F8F8F8',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
   entryName: {
-    fontSize: 19,
+    fontSize: scaleFont(19),
     fontFamily: 'BricolageGrotesque-Regular',
     fontWeight: '600',
     color: '#000000',
@@ -706,7 +1112,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
   entryBrand: {
-    fontSize: 15,
+    fontSize: scaleFont(15),
     fontFamily: 'BricolageGrotesque-Regular',
     color: '#333333',
     opacity: 0.7,
@@ -716,69 +1122,119 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 4,
-    marginBottom: 8,
+    marginBottom: 0, // Cambiato da 8 a 0 per allineamento perfetto come HomeScreen
   },
   entryScoreIcon: {
     marginRight: 5,
   },
   entryScoreValue: {
-    fontSize: 15,
+    fontSize: scaleFont(15),
     fontFamily: 'BricolageGrotesque-SemiBold',
     color: '#000000',
   },
   
-  // Nutrition Expanded Styles
+  // Nutrition Row Container - Dentro la card unificata
+  nutritionRowContainer: {
+    marginTop: 16, // Spazio dalla prima riga
+    paddingTop: 24, // Aumentato da 16 a 24
+    // Rimossa la riga grigia di separazione
+    alignSelf: 'stretch', // Assicura che si estenda per tutta la larghezza
+  },
+  nutritionExpandedShadow: {
+    position: 'absolute',
+    top: SHADOW_OFFSET_VALUE,
+    left: SHADOW_OFFSET_VALUE,
+    width: '100%',
+    height: '100%',
+    backgroundColor: BORDER_COLOR,
+    borderRadius: CARD_BORDER_RADIUS,
+    zIndex: 0,
+  },
   nutritionExpandedContainer: {
-    marginTop: -8,
-    marginBottom: 0,
-    padding: 16,
-    backgroundColor: '#F8F8F8',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
+    backgroundColor: CARD_BACKGROUND_COLOR,
+    borderRadius: CARD_BORDER_RADIUS,
+    borderWidth: CARD_BORDER_WIDTH,
+    borderColor: BORDER_COLOR,
+    padding: 20,
+    position: 'relative',
+    zIndex: 1,
   },
-  entryNutrition: {
+  nutritionGridContainer: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
-    marginTop: 0,
-    paddingHorizontal: 0,
+    marginBottom: 0,
   },
-  nutritionItem: {
-    flexDirection: 'column',
+  nutritionItemWrapper: {
+    width: '48%', // Due colonne
+    marginBottom: 28,
+  },
+  nutritionItemContent: {
     alignItems: 'center',
-    flex: 1,
   },
-  nutritionIconCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+  nutritionIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 6,
-    borderWidth: 1.5,
-    borderColor: '#000000',
+    marginBottom: 8,
   },
-  nutritionLabel: {
-    fontSize: 12,
-    fontFamily: 'BricolageGrotesque-Regular',
-    color: '#666666',
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  nutritionValue: {
-    fontSize: 16,
+  nutritionValueText: {
+    fontSize: 18,
     fontFamily: 'BricolageGrotesque-Bold',
-    color: '#000000',
+    color: BORDER_COLOR,
     textAlign: 'center',
+    marginBottom: 4,
+  },
+  nutritionLabelText: {
+    fontSize: 13,
+    fontFamily: 'BricolageGrotesque-Medium',
+    color: '#666666',
+    textAlign: 'center',
+  },
+  nutritionProgressContainer: {
+    width: '100%',
+    height: 4,
+    backgroundColor: 'rgba(0,0,0,0.1)',
+    borderRadius: 2,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  nutritionProgressFill: {
+    height: '100%',
+    borderRadius: 2,
   },
   
   // Dashed Buttons
   cardButtonsContainer: {
     flexDirection: 'row',
-    marginTop: 0,
-    gap: 8,
+    marginTop: 4,
+    justifyContent: 'center',
   },
-  dashedButton: {
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 12, // Spazio tra i pulsanti
+    width: '100%',
+  },
+  secondaryButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 12,
+    backgroundColor: '#F8F8F8',
+  },
+  secondaryButtonText: {
+    color: '#666666',
+    fontSize: 14,
+    fontWeight: '500',
+    fontFamily: 'BricolageGrotesque-Medium',
+  },
+  primaryButton: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
@@ -786,26 +1242,38 @@ const styles = StyleSheet.create({
     padding: 12,
     borderWidth: 2,
     borderStyle: 'dashed',
+    borderColor: PRIMARY_GREEN,
     borderRadius: 12,
     backgroundColor: 'rgba(0, 70, 59, 0.05)',
   },
-  dashedButtonNutrition: {
-    borderColor: PRIMARY_GREEN,
+  primaryButtonText: {
+    color: PRIMARY_GREEN,
+    fontSize: 14,
+    fontWeight: '600',
+    fontFamily: 'BricolageGrotesque-SemiBold',
+  },
+  dashedButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    borderWidth: 2,
+    borderStyle: 'dashed',
+    borderRadius: 12,
+    backgroundColor: 'rgba(0, 70, 59, 0.05)',
+    width: '100%',
   },
   dashedButtonAdd: {
-    borderColor: '#4ECDC4',
-    backgroundColor: 'rgba(78, 205, 196, 0.05)',
+    borderColor: '#00A86B',
+    backgroundColor: 'rgba(0, 168, 107, 0.05)',
   },
   dashedButtonText: {
-    fontSize: 14,
-    fontFamily: 'BricolageGrotesque-SemiBold',
-    marginLeft: 6,
-  },
-  dashedButtonTextNutrition: {
-    color: PRIMARY_GREEN,
+    fontSize: 24,
+    fontFamily: 'BricolageGrotesque-Bold',
+    fontWeight: '900',
   },
   dashedButtonTextAdd: {
-    color: '#4ECDC4',
+    color: '#00A86B',
   },
   
   // Empty State
@@ -829,266 +1297,213 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginBottom: 24,
   },
-  scanButtonWrapper: {
-    position: 'relative',
-  },
-  scanButtonShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: 12,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE,
-    left: SHADOW_OFFSET_VALUE,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
-  },
-  scanButton: {
-    backgroundColor: '#4ECDC4',
-    borderRadius: 12,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    gap: 8,
-    position: 'relative',
-    zIndex: 1,
-  },
-  scanButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontFamily: 'BricolageGrotesque-SemiBold',
-  },
+
   
-  // Modal Styles
-  modalOverlay: {
+  // Picker Modal Styles - copiati da NutritionProfileSetupScreen
+  pickerModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'flex-end',
   },
-  modalWrapper: {
-    position: 'relative',
-    marginHorizontal: 16,
-    marginBottom: 20,
-  },
-  modalShadow: {
-    backgroundColor: BORDER_COLOR,
+  pickerModalContent: {
+    backgroundColor: CARD_BACKGROUND_COLOR, // Torna bianco per il container principale
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE,
-    left: SHADOW_OFFSET_VALUE,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
+    maxHeight: '80%', // Limita l'altezza massima
   },
-  modalContent: {
-    backgroundColor: CARD_BACKGROUND_COLOR,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    paddingTop: 20,
-    paddingBottom: 40,
-    paddingHorizontal: 20,
-    maxHeight: '80%',
-    position: 'relative',
-    zIndex: 1,
-  },
-  modalHeader: {
+  pickerModalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E5E5',
+    backgroundColor: CARD_BACKGROUND_COLOR, // Header bianco
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
   },
-  modalTitle: {
-    fontSize: 20,
-    fontFamily: 'BricolageGrotesque-Bold',
+  pickerModalTitle: {
+    fontSize: 18,
+    fontFamily: 'BricolageGrotesque-SemiBold',
     color: BORDER_COLOR,
   },
-  modalCloseButton: {
-    padding: 4,
+  pickerModalCancelText: {
+    fontSize: 16,
+    fontFamily: 'BricolageGrotesque-Regular',
+    color: '#666666',
   },
-  modalProductInfo: {
-    marginBottom: 24,
+  pickerModalDoneText: {
+    fontSize: 16,
+    fontFamily: 'BricolageGrotesque-SemiBold',
+    color: PRIMARY_GREEN,
   },
-  modalProductName: {
+  pickerModalDoneTextDisabled: {
+    opacity: 0.5,
+  },
+  pickerProductInfo: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+    backgroundColor: CARD_BACKGROUND_COLOR, // Sezione prodotto bianca
+  },
+  pickerProductName: {
     fontSize: 16,
     fontFamily: 'BricolageGrotesque-SemiBold',
     color: BORDER_COLOR,
     marginBottom: 4,
   },
-  modalProductBrand: {
+  pickerProductBrand: {
     fontSize: 14,
     fontFamily: 'BricolageGrotesque-Regular',
     color: '#666666',
   },
-  quantityInputContainer: {
-    marginBottom: 24,
+  pickerBottomSection: {
+    backgroundColor: BACKGROUND_COLOR,
+    paddingTop: 16,
+    paddingBottom: Platform.OS === 'ios' ? 20 : 15, // Ridotto il padding bottom
+    minHeight: Platform.OS === 'ios' ? 350 : 280, // Più basso su Android per uniformare
   },
-  quantityLabel: {
-    fontSize: 16,
-    fontFamily: 'BricolageGrotesque-SemiBold',
+  quantityPicker: {
+    height: 200,
+    backgroundColor: BACKGROUND_COLOR, // Stesso colore della sezione
+    marginHorizontal: 20,
+  },
+  quantityPickerItem: {
     color: BORDER_COLOR,
-    marginBottom: 8,
-  },
-  quantityInputWrapper: {
-    position: 'relative',
-  },
-  quantityInputShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: 12,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE - 1,
-    left: SHADOW_OFFSET_VALUE - 1,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
-  },
-  quantityInputField: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F5F5F5',
-    borderRadius: 12,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    paddingHorizontal: 16,
-    position: 'relative',
-    zIndex: 1,
-  },
-  quantityInput: {
-    flex: 1,
     fontSize: 18,
     fontFamily: 'BricolageGrotesque-Regular',
-    paddingVertical: 16,
-    color: BORDER_COLOR,
   },
-  quantityUnit: {
-    fontSize: 16,
-    fontFamily: 'BricolageGrotesque-Medium',
+  // Stili per picker Android custom
+  androidPickerContainer: {
+    height: 200,
+    marginHorizontal: 20,
+    backgroundColor: BACKGROUND_COLOR,
+    borderRadius: 12,
+  },
+  androidPickerContent: {
+    paddingVertical: 78, // Padding per centrare l'elemento selezionato
+  },
+  androidPickerItem: {
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  androidPickerItemSelected: {
+    backgroundColor: 'rgba(0, 70, 59, 0.1)', // Verde trasparente per selezione
+  },
+  androidPickerText: {
+    fontSize: 18,
+    fontFamily: 'BricolageGrotesque-Regular',
     color: '#666666',
-    marginLeft: 8,
   },
-  nutritionPreviewWrapper: {
-    position: 'relative',
-    marginBottom: 24,
+  androidPickerTextSelected: {
+    color: BORDER_COLOR,
+    fontFamily: 'BricolageGrotesque-SemiBold',
   },
-  nutritionPreviewShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: 12,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE - 1,
-    left: SHADOW_OFFSET_VALUE - 1,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
+  pickerNutritionPreview: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: 'transparent', // Trasparente per mantenere il grigio della sezione
   },
-  nutritionPreview: {
-    backgroundColor: '#F8F9FA',
-    borderRadius: 12,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    padding: 16,
-    position: 'relative',
-    zIndex: 1,
-  },
-  nutritionPreviewTitle: {
+  pickerNutritionTitle: {
     fontSize: 14,
     fontFamily: 'BricolageGrotesque-SemiBold',
     color: BORDER_COLOR,
     marginBottom: 12,
+    textAlign: 'center',
   },
-  nutritionPreviewGrid: {
+  pickerNutritionGrid: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'space-around',
   },
-  nutritionPreviewItem: {
+  pickerNutritionItem: {
     alignItems: 'center',
     flex: 1,
   },
-  nutritionPreviewValue: {
+  pickerNutritionValue: {
     fontSize: 16,
     fontFamily: 'BricolageGrotesque-Bold',
-    color: '#4ECDC4',
+    color: PRIMARY_GREEN,
   },
-  nutritionPreviewLabel: {
+  pickerNutritionLabel: {
     fontSize: 12,
     fontFamily: 'BricolageGrotesque-Regular',
     color: '#666666',
     marginTop: 2,
   },
-  modalButtons: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  cancelButtonWrapper: {
-    flex: 1,
-    position: 'relative',
-  },
-  cancelButtonShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: 12,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE - 1,
-    left: SHADOW_OFFSET_VALUE - 1,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
-  },
-  cancelButton: {
-    paddingVertical: 16,
-    borderRadius: 12,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    backgroundColor: CARD_BACKGROUND_COLOR,
-    alignItems: 'center',
-    position: 'relative',
-    zIndex: 1,
-  },
-  cancelButtonText: {
-    color: '#666666',
-    fontSize: 16,
-    fontFamily: 'BricolageGrotesque-SemiBold',
-  },
-  confirmButtonWrapper: {
-    flex: 1,
-    position: 'relative',
-  },
-  confirmButtonShadow: {
-    backgroundColor: BORDER_COLOR,
-    borderRadius: 12,
-    position: 'absolute',
-    top: SHADOW_OFFSET_VALUE,
-    left: SHADOW_OFFSET_VALUE,
-    width: '100%',
-    height: '100%',
-    zIndex: 0,
-  },
-  confirmButton: {
-    backgroundColor: '#4ECDC4',
-    borderRadius: 12,
-    borderWidth: CARD_BORDER_WIDTH,
-    borderColor: BORDER_COLOR,
-    paddingVertical: 16,
-    alignItems: 'center',
-    position: 'relative',
-    zIndex: 1,
-  },
-  confirmButtonDisabled: {
-    opacity: 0.6,
-  },
-  confirmButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontFamily: 'BricolageGrotesque-SemiBold',
-  },
   portionDescription: {
-    fontSize: 12,
+    fontSize: scaleFont(12),
     fontFamily: 'BricolageGrotesque-Regular',
     color: '#666666',
     textAlign: 'center',
-    marginTop: 12,
+    marginTop: 8,
     fontStyle: 'italic',
+  },
+  nutritionDiscretionNote: {
+    fontSize: scaleFont(13),
+    fontFamily: 'BricolageGrotesque-Regular',
+    color: '#666666',
+    textAlign: 'center',
+    marginBottom: 6,
+    fontStyle: 'italic',
+  },
+  nutritionInfoContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    marginTop: -1,
+    marginBottom: 4,
+    borderWidth: 1,
+  },
+  nutritionInfoText: {
+    fontSize: scaleFont(13),
+    fontFamily: 'BricolageGrotesque-Medium',
+    color: '#555555',
+    textAlign: 'center',
+  },
+  cardActionsHeader: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 12,
+    marginLeft: 8,
+  },
+  headerActionButton: {
+    padding: 8,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+  },
+  addButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#00463B',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  boldText: {
+    fontFamily: 'BricolageGrotesque-Bold',
+    fontWeight: '700',
+  },
+  // Stili per i pulsanti dei punteggi (copiati da RecentProductsSection)
+  scoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    minWidth: 50,
+  },
+  scoreButtonText: {
+    fontSize: scaleFont(12),
+    fontFamily: "BricolageGrotesque-Bold",
+    color: '#FFFFFF',
+    marginLeft: 4,
+    letterSpacing: 0.2,
   },
 }); 

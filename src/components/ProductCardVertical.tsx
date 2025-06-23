@@ -24,7 +24,7 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
   sustainabilityScore,
   onPress,
 }) => {
-  const { colors, isDark } = useTheme()
+  const { colors } = useTheme()
 
   const getNutritionGradeColor = (grade: string) => {
     switch (grade?.toLowerCase()) {
@@ -39,7 +39,7 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
       case "e":
         return "#FF0000"
       default:
-        return isDark ? "#FFFFFF" : "#212121"
+        return colors.text
     }
   }
 
@@ -54,12 +54,12 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
 
   const styles = StyleSheet.create({
     container: {
-      backgroundColor: isDark ? "#1E1E1E" : "#FFFFFF",
+      backgroundColor: colors.background,
       borderRadius: 12,
       marginBottom: 12,
       overflow: "hidden",
       borderWidth: 1,
-      borderColor: isDark ? "#333333" : "#EEEEEE",
+      borderColor: colors.border,
     },
     content: {
       padding: 12,
@@ -75,7 +75,7 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
       overflow: "hidden",
       marginRight: 12,
       borderWidth: 1,
-      borderColor: isDark ? "#333333" : "#EEEEEE",
+      borderColor: colors.border,
     },
     image: {
       width: "100%",
@@ -84,13 +84,13 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
     noImageContainer: {
       width: 60,
       height: 60,
-      backgroundColor: isDark ? "#1A1A1A" : "#F5F5F5",
+      backgroundColor: colors.surface,
       borderRadius: 8,
       justifyContent: "center",
       alignItems: "center",
       marginRight: 12,
       borderWidth: 1,
-      borderColor: isDark ? "#333333" : "#EEEEEE",
+      borderColor: colors.border,
     },
     infoContainer: {
       flex: 1,
@@ -99,12 +99,12 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
     name: {
       fontSize: 16,
       fontWeight: "bold",
-      color: isDark ? "#FFFFFF" : "#212121",
+      color: colors.text,
       marginBottom: 2,
     },
     brand: {
       fontSize: 14,
-      color: isDark ? "#BDBDBD" : "#757575",
+      color: colors.textMuted,
       marginBottom: 6,
     },
     scoresContainer: {
@@ -120,7 +120,7 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
     },
     nutritionGradeLabel: {
       fontSize: 12,
-      color: isDark ? "#BDBDBD" : "#757575",
+      color: colors.textMuted,
       marginRight: 4,
     },
     nutritionGrade: {
@@ -155,7 +155,7 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
       marginTop: 8,
       paddingTop: 8,
       borderTopWidth: 1,
-      borderTopColor: isDark ? "#333333" : "#F0F0F0",
+      borderTopColor: colors.border,
     },
     detailsButton: {
       flexDirection: "row",
@@ -169,7 +169,7 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
   })
 
   return (
-    <TouchableOpacity style={styles.container} onPress={onPress} activeOpacity={0.9}>
+    <TouchableOpacity style={styles.container} onPress={onPress} activeOpacity={1}>
       <View style={styles.content}>
         <View style={styles.header}>
           {imageUrl ? (
@@ -178,7 +178,7 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
             </View>
           ) : (
             <View style={styles.noImageContainer}>
-              <Ionicons name="image-outline" size={24} color={isDark ? "#BDBDBD" : "#757575"} />
+              <Ionicons name="image-outline" size={24} color={colors.textMuted} />
             </View>
           )}
 
@@ -209,7 +209,7 @@ const ProductCardVertical: React.FC<ProductCardVerticalProps> = ({
             </View>
           )}
 
-          {sustainabilityScore && (
+          {sustainabilityScore && sustainabilityScore > 0 && (
             <View style={styles.scoreContainer}>
               <Ionicons name="leaf" size={14} color={getScoreColor(sustainabilityScore)} style={styles.scoreIcon} />
               <Text style={[styles.scoreText, { color: getScoreColor(sustainabilityScore) }]}>

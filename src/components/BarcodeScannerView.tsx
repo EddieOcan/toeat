@@ -217,7 +217,7 @@ const BarcodeScannerView = forwardRef<BarcodeScannerViewRef, BarcodeScannerViewP
         flash={torch ? "on" : "off"}
       />
 
-      <Text style={styles.scanText} numberOfLines={1}>Posiziona il codice a barre all'interno del riquadro</Text>
+
 
       <View style={styles.overlay}>
         <View style={styles.scanArea}>

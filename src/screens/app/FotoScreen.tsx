@@ -4,6 +4,7 @@ import React from "react"
 import { useState, useEffect, useRef, useCallback } from "react"
 import {
   View,
+  Text,
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
@@ -48,6 +49,8 @@ import AppText from "../../components/AppText"
 import { typography } from "../../theme/typography"
 import RecentProductsSection from "../../components/RecentProductsSection"
 import { useRecentProducts } from "../../contexts/RecentProductsContext"
+import { usePhotoAnalysis } from "../../contexts/PhotoAnalysisContext"
+import { getScoreColor } from "../../utils/formatters"
 
 type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabsParamList, "Foto">, // AGGIORNATO da "Home" a "Foto"
@@ -61,34 +64,7 @@ const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 const RECENT_CARD_BORDER_WIDTH = 1.5;
 const RECENT_SHADOW_OFFSET_VALUE = 3.5;
 
-// Funzioni helper per colore punteggio (basate su SalvatiScreen)
-const getColorFromNumericScore_ForRecent = (score: number | undefined | null, currentThemeColors: any): string => {
-  const defaultColor = currentThemeColors.textMuted || '#888888'; 
-  if (score === undefined || score === null) return defaultColor;
-  if (score >= 81) return '#1E8F4E'; 
-  if (score >= 61) return '#7AC547'; 
-  if (score >= 41) return '#FFC734'; 
-  if (score >= 21) return '#FF9900'; 
-  if (score >= 0) return '#FF0000';   
-  return defaultColor; 
-};
-
-const getScoreColor_ForRecent = (grade: string | undefined | null, type: 'nutri' | 'eco', numericScore?: number | undefined | null, currentThemeColors?: any) => {
-  if (grade && typeof grade === 'string' && grade.toLowerCase() !== 'unknown') {
-    if (type === 'nutri') {
-      switch (grade.toLowerCase()) {
-        case "a": return '#2ECC71'; case "b": return '#82E0AA'; case "c": return '#F4D03F'; 
-        case "d": return '#E67E22'; case "e": return '#EC7063'; default: break; 
-      }
-    } else { 
-      switch (grade.toLowerCase()) {
-        case "a": return '#1D8348'; case "b": return '#28B463'; case "c": return '#F5B041'; 
-        case "d": return '#DC7633'; case "e": return '#BA4A00'; default: break; 
-      }
-    }
-  }
-  return getColorFromNumericScore_ForRecent(numericScore, currentThemeColors);
-};
+// Funzioni helper rimosse - ora si usa getScoreColor globale
 
 const RECENT_SECTION_TITLE_HEIGHT = 50; 
 const RECENT_LIST_ITEM_HEIGHT = 170;    
@@ -100,15 +76,46 @@ const TAB_BAR_ESTIMATED_HEIGHT = Platform.OS === 'ios' ? 80 : 60;
 const WAVE_CORNER_RADIUS = 25;
 
 const FotoScreen: React.FC<Props> = ({ navigation }) => {
-  // const [scanMode, setScanMode] = useState<'barcode' | 'photo'>('photo'); // RIMOSSO, sempre foto
-
-  // const [loading, setLoading] = useState(false) // loading era per processBarcodeScan
-  const [isFotoCameraActive, setIsFotoCameraActive] = useState(true); // NUOVO STATO
+  // TUTTI GLI HOOKS DI STATO ALL'INIZIO
+  const [isFotoCameraActive, setIsFotoCameraActive] = useState(true);
+  const [cameraViewHeight, setCameraViewHeight] = useState(screenHeight);
+  
+  // HOOKS DI CONTESTO
   const { colors } = useTheme(); 
-  const { user } = useAuth()
-  const [cameraViewHeight, setCameraViewHeight] = useState(screenHeight); 
+  const { user } = useAuth();
   const insets = useSafeAreaInsets();
-  const { reloadRecentProducts } = useRecentProducts(); // Ottieni la funzione dal contesto condiviso
+  const { reloadRecentProducts } = useRecentProducts();
+  const { updateAnalysis, setIsAnalyzing, clearAnalysis } = usePhotoAnalysis();
+  
+  // REFS
+  const reloadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastReloadRef = useRef(0);
+  
+  // COSTANTI
+  const RELOAD_DEBOUNCE_MS = 2000; // 2 secondi di debounce
+  const MIN_RELOAD_INTERVAL = 5000; // Minimo 5 secondi tra reload
+
+  // Funzione ottimizzata per il reload con debounce
+  const debouncedReloadRecentProducts = useCallback(() => {
+    const now = Date.now();
+    
+    // Se è troppo presto per un altro reload, ignora
+    if (now - lastReloadRef.current < MIN_RELOAD_INTERVAL) {
+      console.log('[FOTO SCREEN] Reload ignorato - troppo presto');
+      return;
+    }
+    
+    // Cancella il timeout precedente se esiste
+    if (reloadTimeoutRef.current) {
+      clearTimeout(reloadTimeoutRef.current);
+    }
+    
+    // Imposta un nuovo timeout
+    reloadTimeoutRef.current = setTimeout(() => {
+      reloadRecentProducts();
+      lastReloadRef.current = Date.now();
+    }, RELOAD_DEBOUNCE_MS);
+  }, [reloadRecentProducts]);
 
   useEffect(() => {
     const calculateLayout = () => {
@@ -129,23 +136,35 @@ const FotoScreen: React.FC<Props> = ({ navigation }) => {
   }, []); 
 
   useFocusEffect(useCallback(() => {
-    if (user) { reloadRecentProducts(); }
-    setIsFotoCameraActive(true); // Attiva la camera quando la schermata è a fuoco
+    if (user) { 
+      // Ottimizza: ricarica solo se necessario e con debounce
+      debouncedReloadRecentProducts();
+    }
+    setIsFotoCameraActive(true);
     console.log("[FotoScreen] Foto focus Gained, Camera Active: true");
     return () => {
-      setIsFotoCameraActive(false); // Disattiva la camera quando la schermata perde il focus
+      setIsFotoCameraActive(false);
+      // Pulisci il timeout quando si perde il focus
+      if (reloadTimeoutRef.current) {
+        clearTimeout(reloadTimeoutRef.current);
+        reloadTimeoutRef.current = null;
+      }
       console.log("[FotoScreen] Foto focus Lost, Camera Active: false");
     };
-  }, [user, reloadRecentProducts]));
+  }, [user, debouncedReloadRecentProducts]));
 
   const navigateToDetail = (productRecordId: string, initialProductData?: RawProductData | null, aiAnalysisResult?: GeminiAnalysisResult | null) => {
     navigation.navigate("ProductDetail", { 
       productRecordId, 
       initialProductData, 
       aiAnalysisResult,
-      isPhotoAnalysis: true  // Aggiungo il flag isPhotoAnalysis=true per i prodotti analizzati con foto
+      isPhotoAnalysis: true
     });
-    reloadRecentProducts();
+    // Rimuovi il reload immediato - sarà gestito dal debounce se necessario
+  };
+
+  const navigateToPreferences = () => {
+    navigation.navigate("UserPreferences");
   };
 
   // processBarcodeScan RIMOSSO
@@ -154,103 +173,176 @@ const FotoScreen: React.FC<Props> = ({ navigation }) => {
     if (!user) { Alert.alert("Login Richiesto", "Devi effettuare il login."); return; }
     
     try {
-      console.log("[FOTO SCREEN] Inizio processamento visual scan");
+      console.log("[FOTO SCREEN] Inizio processamento visual scan ottimizzato");
       
-      // 1. NAVIGA IMMEDIATAMENTE alla ProductDetailScreen con dati placeholder
-      const placeholderBarcode = generateVisualScanBarcode();
+      // 1. GENERA ID UNICO E NAVIGA UNA SOLA VOLTA
+      const analysisId = `photo_analysis_${Date.now()}`;
       const placeholderProductData: RawProductData = {
-        code: placeholderBarcode,
-        product_name: "Analisi immagine...",
-        brands: "...",
-        image_url: imageUri, // Usa l'URI locale temporaneamente
+        code: analysisId,
+        product_name: "Analisi in corso...",
+        brands: "Rilevamento automatico...",
+        image_url: imageUri,
         ingredients_text: "",
         nutriments: {},
         nutrition_grades: "",
         ecoscore_grade: "",
-        categories: "Scansione Visiva",
+        categories: "Analisi Foto",
         labels: "",
         packaging: "",
       };
       
-      // Naviga SUBITO con i dati placeholder e il flag di loading
-      console.log("[FOTO SCREEN] Navigazione immediata alla ProductDetailScreen");
-      navigateToDetail("temp_visual_scan", placeholderProductData, null); // Il flag isPhotoAnalysis è già impostato nella navigateToDetail
+      // INIZIALIZZA IL CONTEXT E NAVIGA UNA SOLA VOLTA
+      console.log("[FOTO SCREEN] Navigazione UNICA alla ProductDetailScreen");
+      setIsAnalyzing(true);
+      updateAnalysis({
+        productRecordId: analysisId,
+        productData: placeholderProductData,
+        isComplete: false
+      });
       
-      // 2. ESEGUI L'ANALISI AI IN BACKGROUND
-      console.log("[FOTO SCREEN] Inizio analisi AI in background");
+      // Naviga con flag isPhotoAnalysis per attivare i messaggi di loading
+      navigation.navigate("ProductDetail", { 
+        productRecordId: analysisId, 
+        initialProductData: placeholderProductData, 
+        aiAnalysisResult: null,
+        isPhotoAnalysis: true
+      });
       
-      // Converti l'immagine in base64
-      const imageBase64 = await FileSystem.readAsStringAsync(imageUri, { encoding: FileSystem.EncodingType.Base64 });
-      let mimeType = "image/jpeg";
-      if (imageUri.endsWith(".png")) mimeType = "image/png"; 
-      else if (imageUri.endsWith(".webp")) mimeType = "image/webp";
+      // 2. ESEGUI OPERAZIONI IN PARALLELO PER MASSIMIZZARE LA VELOCITÀ
+      console.log("[FOTO SCREEN] Avvio operazioni parallele...");
       
-      // Esegui analisi AI - prova prima quella personalizzata, poi fallback a quella standard
+      const analysisStartTime = Date.now();
+      
+      // Esegui conversione base64 e analisi AI in parallelo
+      const [imageBase64, mimeTypeResult] = await Promise.all([
+        FileSystem.readAsStringAsync(imageUri, { encoding: FileSystem.EncodingType.Base64 }),
+        Promise.resolve(imageUri.endsWith(".png") ? "image/png" : 
+                       imageUri.endsWith(".webp") ? "image/webp" : "image/jpeg")
+      ]);
+      
+      // Esegui analisi AI con strategia di fallback veloce
       let visualAiAnalysis: GeminiAnalysisResult;
+      
       try {
-        console.log("[FOTO SCREEN] Tentativo analisi personalizzata");
-        visualAiAnalysis = await analyzeImageWithUserPreferences(imageBase64, mimeType, "Prodotto da foto", user.id);
+        console.log("[FOTO SCREEN] Tentativo analisi personalizzata veloce");
+        // Timeout più aggressivo per l'analisi personalizzata
+        const personalizedAnalysisPromise = analyzeImageWithUserPreferences(imageBase64, mimeTypeResult, "Prodotto da foto", user.id);
+        const timeoutPromise = new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout analisi personalizzata')), 15000) // 15 secondi timeout
+        );
+        
+        visualAiAnalysis = await Promise.race([personalizedAnalysisPromise, timeoutPromise]);
       } catch (personalizedError) {
-        console.warn("[FOTO SCREEN] Analisi personalizzata fallita, fallback a analisi standard:", personalizedError);
-        visualAiAnalysis = await analyzeImageWithGeminiVisionAiSdk(imageBase64, mimeType, "Prodotto da foto");
+        console.warn("[FOTO SCREEN] Analisi personalizzata fallita, fallback veloce:", personalizedError);
+        // Fallback con timeout più breve
+        const fallbackPromise = analyzeImageWithGeminiVisionAiSdk(imageBase64, mimeTypeResult, "Prodotto da foto");
+        const timeoutPromise = new Promise<never>((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout analisi fallback')), 10000) // 10 secondi timeout
+        );
+        
+        visualAiAnalysis = await Promise.race([fallbackPromise, timeoutPromise]);
       }
+      
+      const analysisTime = Date.now() - analysisStartTime;
+      console.log(`[FOTO SCREEN] Analisi AI completata in ${analysisTime}ms`);
       
       if (!visualAiAnalysis) { 
-        Alert.alert("Errore Analisi AI", "Impossibile analizzare."); 
+        Alert.alert("Errore Analisi AI", "Impossibile analizzare l'immagine."); 
+        setIsAnalyzing(false);
         return; 
       }
       
-      // Upload dell'immagine
-      const uploadedImageUrl = await uploadProductImage(user.id, imageUri);
-      if (!uploadedImageUrl) { 
-        Alert.alert("Errore Upload", "Impossibile caricare immagine."); 
-        return; 
-      }
+      // 3. AGGIORNA UI VIA CONTEXT CON I RISULTATI DELL'ANALISI
+      console.log("[FOTO SCREEN] Aggiornamento UI via context con risultati analisi...");
       
-      // 3. CREA I DATI FINALI E SALVA NEL DATABASE
-      const finalRawDataForVisual: RawProductData = {
-        code: placeholderBarcode,
+      const tempFinalData: RawProductData = {
+        code: analysisId,
         product_name: visualAiAnalysis.productNameFromVision || "Prodotto (foto)",
-        brands: visualAiAnalysis.brandFromVision || "Sconosciuta",
-        image_url: uploadedImageUrl,
+        brands: visualAiAnalysis.brandFromVision || "Marca rilevata",
+        image_url: imageUri,
         ingredients_text: "",
         nutriments: {},
         nutrition_grades: "",
         ecoscore_grade: "",
-        categories: visualAiAnalysis.productNameFromVision || "Scansione Visiva",
+        categories: visualAiAnalysis.productNameFromVision || "Analisi Foto",
         labels: "",
         packaging: "",
       };
       
+      // AGGIORNA VIA CONTEXT - NESSUNA NAVIGAZIONE
+      updateAnalysis({
+        productRecordId: analysisId,
+        productData: tempFinalData,
+        aiAnalysisResult: visualAiAnalysis,
+        isComplete: false
+      });
+      
+      // 4. UPLOAD E SALVATAGGIO IN BACKGROUND OTTIMIZZATO
+      console.log("[FOTO SCREEN] Upload e salvataggio in background...");
+      
+      const uploadStartTime = Date.now();
+      
+      // Esegui upload e generazione barcode in parallelo
+      const [uploadedImageUrl, finalBarcode] = await Promise.all([
+        uploadProductImage(user.id, imageUri).catch(error => {
+          console.warn("[FOTO SCREEN] Upload immagine fallito:", error);
+          return null;
+        }),
+        Promise.resolve(generateVisualScanBarcode())
+      ]);
+      
+      const uploadTime = Date.now() - uploadStartTime;
+      console.log(`[FOTO SCREEN] Upload completato in ${uploadTime}ms`);
+      
+      // Dati finali con URL immagine caricata
+      const finalRawDataForVisual: RawProductData = {
+        ...tempFinalData,
+        code: finalBarcode,
+        image_url: uploadedImageUrl || imageUri,
+      };
+      
+      // Salva nel database
+      const saveStartTime = Date.now();
       const savedProductRecord = await saveProductAndManageHistory(
         user.id, 
-        placeholderBarcode, 
+        finalBarcode, 
         finalRawDataForVisual, 
         visualAiAnalysis, 
-        uploadedImageUrl, 
+        uploadedImageUrl || imageUri, 
         true
       );
       
+      const saveTime = Date.now() - saveStartTime;
+      console.log(`[FOTO SCREEN] Salvataggio completato in ${saveTime}ms`);
+      
       if (savedProductRecord?.id) {
-        console.log("[FOTO SCREEN] Analisi completata, dati salvati. ID:", savedProductRecord.id);
-        console.log("[FOTO SCREEN] Aggiornamento ProductDetailScreen con nuovo ID prodotto");
+        console.log("[FOTO SCREEN] Processo completato, aggiornamento finale via context");
         
-        // Naviga alla stessa ProductDetailScreen ma con l'ID reale e i dati finali
-        // Questo aggiornerà la pagina esistente invece di sostituirla
-        navigation.navigate("ProductDetail", {
+        // AGGIORNAMENTO FINALE VIA CONTEXT - NESSUNA NAVIGAZIONE
+        updateAnalysis({
           productRecordId: savedProductRecord.id,
-          initialProductData: finalRawDataForVisual,
+          productData: finalRawDataForVisual,
           aiAnalysisResult: visualAiAnalysis,
-          isPhotoAnalysis: true
+          isComplete: true
         });
         
+        setIsAnalyzing(false);
+        
+        // Usa il reload ottimizzato con debounce
+        debouncedReloadRecentProducts();
+        
+        const totalTime = Date.now() - analysisStartTime;
+        console.log(`[FOTO SCREEN] Processo totale completato in ${totalTime}ms`);
       } else {
-        Alert.alert("Errore Salvataggio", "Impossibile salvare prodotto.");
+        Alert.alert("Errore Salvataggio", "Impossibile salvare l'analisi.");
+        setIsAnalyzing(false);
       }
-      
+
     } catch (error: any) { 
-      console.error("[FOTO SCREEN] Errore in processVisualScan:", error);
-      Alert.alert("Errore Inatteso", error.message || "Errore analisi visiva."); 
+      console.error("[FOTO SCREEN] Errore critico nell'analisi visiva:", error);
+      Alert.alert("Errore Critico", error.message || "Errore nell'analisi dell'immagine."); 
+      setIsAnalyzing(false);
+      clearAnalysis();
     }
   };
 
@@ -360,7 +452,7 @@ const FotoScreen: React.FC<Props> = ({ navigation }) => {
       borderColor: '#000000',
       position: 'relative',
       zIndex: 1, 
-      resizeMode: 'contain',
+      resizeMode: 'cover',
     },
     recentProductCardContent: { 
       flex: 1,
@@ -402,6 +494,42 @@ const FotoScreen: React.FC<Props> = ({ navigation }) => {
       height: 35,
       resizeMode: 'contain'
     },
+    // Stili per il pulsante preferenze (identico al pulsante Scansiona)
+    preferencesButtonWrapper: {
+      position: 'absolute',
+      right: 20,
+      zIndex: 10,
+    },
+    preferencesButtonShadow: {
+      position: 'absolute',
+      top: 3,
+      left: 3,
+      width: '100%',
+      height: '100%',
+      backgroundColor: '#4A90E2', // Azzurro per l'ombra
+      borderRadius: 16,
+      zIndex: 0,
+    },
+    preferencesButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: 16,
+      padding: 12,
+      paddingHorizontal: 16,
+      backgroundColor: '#FFFFFF', // Sfondo bianco
+      borderWidth: 2,
+      borderColor: '#4A90E2', // Bordo azzurro
+      position: 'relative',
+      zIndex: 1,
+      minHeight: 48,
+    },
+    preferencesButtonText: {
+      fontSize: 14,
+      fontFamily: 'BricolageGrotesque-SemiBold',
+      color: '#4A90E2', // Testo azzurro
+      marginLeft: 8,
+    },
   });
 
   return (
@@ -412,6 +540,19 @@ const FotoScreen: React.FC<Props> = ({ navigation }) => {
             onPhotoTaken={handlePhotoTakenFromView} 
             isCameraActive={isFotoCameraActive} // PASSA LO STATO
         />
+        
+        {/* Pulsante Preferenze */}
+        <View style={[styles.preferencesButtonWrapper, { top: insets.top + 10 }]}>
+          <View style={styles.preferencesButtonShadow} />
+          <TouchableOpacity 
+            style={styles.preferencesButton}
+            onPress={navigateToPreferences}
+            activeOpacity={1}
+          >
+            <Ionicons name="settings" size={20} color="#4A90E2" />
+            <Text style={styles.preferencesButtonText} allowFontScaling={false}>Le mie preferenze</Text>
+          </TouchableOpacity>
+        </View>
       </View>
       
       <View style={{position: 'relative', marginTop: -WAVE_CORNER_RADIUS}}>

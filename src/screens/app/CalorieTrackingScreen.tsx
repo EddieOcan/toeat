@@ -11,7 +11,7 @@ import {
   Image,
   Platform,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { scaleFont } from '../../theme/typography';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../lib/supabase';
@@ -24,6 +24,7 @@ import {
   DailyNutritionLog,
   DailyNutritionEntry,
 } from '../../services/nutritionApi';
+import { getScoreColor } from '../../utils/formatters';
 
 // Costanti di stile per uniformare con l'app
 const BACKGROUND_COLOR = '#f8f4ec';
@@ -55,6 +56,12 @@ const dataCache = new Map<string, {
 }>();
 
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minuti
+
+// Funzione helper per formattare i numeri: mostra decimali solo se non sono .0
+const formatNumber = (value: number): string => {
+  const formatted = value.toFixed(1);
+  return formatted.endsWith('.0') ? Math.round(value).toString() : formatted;
+};
 
 export default function CalorieTrackingScreen({ navigation }: Props) {
   const [profile, setProfile] = useState<UserNutritionProfile | null>(null);
@@ -190,16 +197,7 @@ export default function CalorieTrackingScreen({ navigation }: Props) {
     );
   }, []);
 
-  // Memoizza il colore del health score
-  const getHealthScoreColor = useCallback((score: number | undefined | null): string => {
-    if (score === undefined || score === null) return '#888888';
-    if (score >= 81) return '#1E8F4E'; 
-    if (score >= 61) return '#7AC547'; 
-    if (score >= 41) return '#FFC734'; 
-    if (score >= 21) return '#FF9900'; 
-    if (score >= 0) return '#FF0000';   
-    return '#888888';
-  }, []);
+  // getHealthScoreColor rimossa - ora si usa getScoreColor globale
 
   // Memoizza il componente calendario
   const renderCalendar = useCallback(() => {
@@ -267,7 +265,7 @@ export default function CalorieTrackingScreen({ navigation }: Props) {
       <View style={styles.calendarMinimal}>
         {!isToday && (
           <TouchableOpacity style={styles.todayButtonTop} onPress={goToToday}>
-            <Text style={styles.todayButtonTopText}>← Torna a oggi</Text>
+            <Text style={styles.todayButtonTopText} allowFontScaling={false}>← Torna a oggi</Text>
           </TouchableOpacity>
         )}
         
@@ -285,8 +283,8 @@ export default function CalorieTrackingScreen({ navigation }: Props) {
           </TouchableOpacity>
           
           <View style={styles.calendarCenter}>
-            <Text style={styles.calendarMainDate}>{dateLabel}</Text>
-            <Text style={styles.calendarSubDate}>{dateSubtitle}</Text>
+            <Text style={styles.calendarMainDate} allowFontScaling={false}>{dateLabel}</Text>
+            <Text style={styles.calendarSubDate} allowFontScaling={false}>{dateSubtitle}</Text>
           </View>
           
           <TouchableOpacity 
@@ -319,9 +317,13 @@ export default function CalorieTrackingScreen({ navigation }: Props) {
     return (
       <View style={styles.summaryCardWrapper}>
         <View style={styles.summaryCardShadow} />
-        <View style={styles.summaryCardContainer}>
+        <TouchableOpacity 
+          style={styles.summaryCardContainer}
+          onPress={() => navigation.navigate('NutritionProfileSetup')}
+          activeOpacity={1}
+        >
           <View style={styles.summaryHeader}>
-            <Text style={styles.summaryTitle}>
+            <Text style={styles.summaryTitle} allowFontScaling={false}>
               Calorie per {selectedDate.toLocaleDateString('it', { 
                 weekday: 'long',
                 day: 'numeric',
@@ -331,96 +333,176 @@ export default function CalorieTrackingScreen({ navigation }: Props) {
             <Text style={[
               styles.summarySubtitle,
               kcalRemaining < 0 ? styles.summaryOver : styles.summaryRemaining
-            ]}>
+            ]} allowFontScaling={false}>
               {kcalRemaining >= 0 
-                ? `${Math.round(kcalRemaining)} kcal rimanenti`
-                : `${Math.round(Math.abs(kcalRemaining))} kcal oltre il target`
+                ? `${formatNumber(kcalRemaining)} kcal rimanenti`
+                : `${formatNumber(Math.abs(kcalRemaining))} kcal oltre il target`
               }
             </Text>
           </View>
 
-          <View style={styles.calorieProgress}>
-            <View style={styles.calorieNumbers}>
-              <Text style={styles.calorieConsumed}>
-                {Math.round(currentLog.total_kcal)}
-              </Text>
-              <Text style={styles.calorieTarget}>
-                / {currentLog.target_kcal} kcal
-              </Text>
+          {/* Grid 2x2 con i valori nutrizionali - STESSO STILE DELLE CARD ESPANSE */}
+          <View style={styles.nutritionGridContainer}>
+            {/* Calorie */}
+            <View style={styles.nutritionItemWrapper}>
+              <View style={styles.nutritionItemContent}>
+                <View style={[
+                  styles.nutritionIconContainer,
+                  { backgroundColor: '#FFA07A' }
+                ]}>
+                  <Ionicons 
+                    name="flame" 
+                    size={22} 
+                    color="#000000" 
+                  />
+                </View>
+                
+                <View style={styles.nutritionValueRow}>
+                  <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                    {formatNumber(currentLog.total_kcal)} kcal
+                  </Text>
+                  <Text style={styles.nutritionTargetText} allowFontScaling={false}>
+                    / {currentLog.target_kcal}
+                  </Text>
+                </View>
+                
+                <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                  Energia
+                </Text>
+                
+                <View style={styles.nutritionProgressContainer}>
+                  <View style={[
+                    styles.nutritionProgressFill,
+                    { 
+                      width: `${kcalProgress}%`,
+                      backgroundColor: '#FFA07A'
+                    }
+                  ]} />
+                </View>
+              </View>
             </View>
-            <View style={styles.progressBarContainer}>
-              <View style={[styles.progressBar, { width: `${kcalProgress}%` }]} />
+
+            {/* Proteine */}
+            <View style={styles.nutritionItemWrapper}>
+              <View style={styles.nutritionItemContent}>
+                <View style={[
+                  styles.nutritionIconContainer,
+                  { backgroundColor: '#CD5C5C' }
+                ]}>
+                  <Ionicons 
+                    name="barbell" 
+                    size={22} 
+                    color="#000000" 
+                  />
+                </View>
+                
+                <View style={styles.nutritionValueRow}>
+                  <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                    {formatNumber(currentLog.total_proteins_g)}g
+                  </Text>
+                  <Text style={styles.nutritionTargetText} allowFontScaling={false}>
+                    / {formatNumber(currentLog.target_proteins_g)}
+                  </Text>
+                </View>
+                
+                <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                  Proteine
+                </Text>
+                
+                <View style={styles.nutritionProgressContainer}>
+                  <View style={[
+                    styles.nutritionProgressFill,
+                    { 
+                      width: `${proteinProgress}%`,
+                      backgroundColor: '#CD5C5C'
+                    }
+                  ]} />
+                </View>
+              </View>
+            </View>
+
+            {/* Carboidrati */}
+            <View style={styles.nutritionItemWrapper}>
+              <View style={styles.nutritionItemContent}>
+                <View style={[
+                  styles.nutritionIconContainer,
+                  { backgroundColor: '#FFD700' }
+                ]}>
+                  <Ionicons 
+                    name="layers" 
+                    size={22} 
+                    color="#000000" 
+                  />
+                </View>
+                
+                <View style={styles.nutritionValueRow}>
+                  <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                    {formatNumber(currentLog.total_carbs_g)}g
+                  </Text>
+                  <Text style={styles.nutritionTargetText} allowFontScaling={false}>
+                    / {formatNumber(currentLog.target_carbs_g)}
+                  </Text>
+                </View>
+                
+                <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                  Carboidrati
+                </Text>
+                
+                <View style={styles.nutritionProgressContainer}>
+                  <View style={[
+                    styles.nutritionProgressFill,
+                    { 
+                      width: `${carbProgress}%`,
+                      backgroundColor: '#FFD700'
+                    }
+                  ]} />
+                </View>
+              </View>
+            </View>
+
+            {/* Grassi */}
+            <View style={styles.nutritionItemWrapper}>
+              <View style={styles.nutritionItemContent}>
+                <View style={[
+                  styles.nutritionIconContainer,
+                  { backgroundColor: '#87CEEB' }
+                ]}>
+                  <Ionicons 
+                    name="cafe" 
+                    size={22} 
+                    color="#000000" 
+                  />
+                </View>
+                
+                <View style={styles.nutritionValueRow}>
+                  <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                    {formatNumber(currentLog.total_fats_g)}g
+                  </Text>
+                  <Text style={styles.nutritionTargetText} allowFontScaling={false}>
+                    / {formatNumber(currentLog.target_fats_g)}
+                  </Text>
+                </View>
+                
+                <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                  Grassi
+                </Text>
+                
+                <View style={styles.nutritionProgressContainer}>
+                  <View style={[
+                    styles.nutritionProgressFill,
+                    { 
+                      width: `${fatProgress}%`,
+                      backgroundColor: '#87CEEB'
+                    }
+                  ]} />
+                </View>
+              </View>
             </View>
           </View>
-
-          <View style={styles.macroGrid}>
-            <View style={styles.macroItem}>
-              <View style={styles.macroIconContainer}>
-                <View style={[styles.macroIconCircle, { backgroundColor: '#CD5C5C' }]}>
-                  <Ionicons name="barbell" size={16} color="#000000" />
-                </View>
-              </View>
-              <Text style={styles.macroLabel}>Proteine</Text>
-              <Text style={styles.macroValue}>
-                {Math.round(currentLog.total_proteins_g)}g
-              </Text>
-              <Text style={styles.macroTarget}>
-                / {Math.round(currentLog.target_proteins_g)}g
-              </Text>
-              <View style={styles.macroProgressContainer}>
-                <View style={[
-                  styles.macroProgress,
-                  { width: `${proteinProgress}%`, backgroundColor: '#CD5C5C' }
-                ]} />
-              </View>
-            </View>
-
-            <View style={styles.macroItem}>
-              <View style={styles.macroIconContainer}>
-                <View style={[styles.macroIconCircle, { backgroundColor: '#FFD700' }]}>
-                  <Ionicons name="layers" size={16} color="#000000" />
-                </View>
-              </View>
-              <Text style={styles.macroLabel}>Carboidrati</Text>
-              <Text style={styles.macroValue}>
-                {Math.round(currentLog.total_carbs_g)}g
-              </Text>
-              <Text style={styles.macroTarget}>
-                / {Math.round(currentLog.target_carbs_g)}g
-              </Text>
-              <View style={styles.macroProgressContainer}>
-                <View style={[
-                  styles.macroProgress,
-                  { width: `${carbProgress}%`, backgroundColor: '#FFD700' }
-                ]} />
-              </View>
-            </View>
-
-            <View style={styles.macroItem}>
-              <View style={styles.macroIconContainer}>
-                <View style={[styles.macroIconCircle, { backgroundColor: '#87CEEB' }]}>
-                  <Ionicons name="cafe" size={16} color="#000000" />
-                </View>
-              </View>
-              <Text style={styles.macroLabel}>Grassi</Text>
-              <Text style={styles.macroValue}>
-                {Math.round(currentLog.total_fats_g)}g
-              </Text>
-              <Text style={styles.macroTarget}>
-                / {Math.round(currentLog.target_fats_g)}g
-              </Text>
-              <View style={styles.macroProgressContainer}>
-                <View style={[
-                  styles.macroProgress,
-                  { width: `${fatProgress}%`, backgroundColor: '#87CEEB' }
-                ]} />
-              </View>
-            </View>
-          </View>
-        </View>
+        </TouchableOpacity>
       </View>
     );
-  }, [currentLog, profile, selectedDate]);
+  }, [currentLog, profile, selectedDate, navigation]);
 
   // Memoizza il pulsante aggiungi prodotto
   const renderAddProductButton = useCallback(() => (
@@ -431,9 +513,10 @@ export default function CalorieTrackingScreen({ navigation }: Props) {
         onPress={() => navigation.navigate('SelectProductForDay', { 
           selectedDate: currentDateString 
         })}
+        activeOpacity={1}
       >
         <Ionicons name="add" size={24} color="#FFFFFF" />
-        <Text style={styles.addButtonText}>Aggiungi Prodotto</Text>
+        <Text style={styles.addButtonText} allowFontScaling={false}>Aggiungi Prodotto</Text>
       </TouchableOpacity>
     </View>
   ), [navigation, currentDateString]);
@@ -444,8 +527,8 @@ export default function CalorieTrackingScreen({ navigation }: Props) {
       return (
         <View style={styles.emptyState}>
           <Ionicons name="restaurant-outline" size={64} color="#CCCCCC" />
-          <Text style={styles.emptyStateTitle}>Nessun prodotto aggiunto</Text>
-          <Text style={styles.emptyStateDescription}>
+          <Text style={styles.emptyStateTitle} allowFontScaling={false}>Nessun prodotto aggiunto</Text>
+          <Text style={styles.emptyStateDescription} allowFontScaling={false}>
             Inizia a tracciare la tua alimentazione aggiungendo i prodotti che consumi
           </Text>
         </View>
@@ -454,153 +537,282 @@ export default function CalorieTrackingScreen({ navigation }: Props) {
 
     return (
       <View style={styles.entriesContainer}>
-        <Text style={styles.entriesTitle}>
+        <Text style={styles.entriesTitle} allowFontScaling={false}>
           I Tuoi Prodotti ({entries.length})
         </Text>
         
-        {entries.map((entry) => (
-          <View key={entry.id} style={{ marginBottom: 40 }}>
-            {/* Card principale */}
-            <View style={styles.entryCardWrapper}>
-              <View style={styles.entryCardShadow} />
-              <TouchableOpacity 
-                style={styles.entryCardContainer}
-                onPress={() => {/* Eventuale navigazione al dettaglio */}}
-                activeOpacity={0.8}
-              >
-                {/* Prima riga: Immagine, Nome, Marchio, Punteggio */}
-                <View style={styles.entryFirstRow}>
-                  <View style={styles.entryImageWrapper}>
-                    <View style={styles.entryImageShadow} />
-                    {entry.product_image ? (
-                      <Image 
-                        source={{ uri: entry.product_image }} 
-                        style={styles.entryImage} 
-                      />
-                    ) : (
-                      <View style={styles.entryImagePlaceholder}>
-                        <Ionicons name="image-outline" size={24} color="#666666" />
-                      </View>
-                    )}
+        {entries.map((entry) => {
+          // Determina il colore della card basato sul punteggio salute
+          const cardColor = entry.health_score !== undefined ? getScoreColor(entry.health_score) : '#000000';
+          
+          return (
+            <View key={entry.id}>
+              {/* Card unificata - stile copiato da SelectProductForDayScreen */}
+              <View style={entry.showNutrition ? styles.entryCardWrapperExpanded : styles.entryCardWrapper}>
+                <View style={[styles.entryCardShadow, { backgroundColor: cardColor }]} />
+                <TouchableOpacity 
+                  style={[
+                    styles.entryCardContainer,
+                    { borderColor: cardColor },
+                    entry.showNutrition && styles.entryCardContainerExpanded
+                  ]}
+                  onPress={() => toggleNutritionVisibility(entry.id)}
+                  activeOpacity={1}
+                >
+                            {/* Prima riga: Immagine, Nome, Marchio, Punteggio + Icone azioni se espansa */}
+            <View style={styles.entryFirstRow}>
+              <View style={styles.entryImageWrapper}>
+                <View style={[styles.entryImageShadow, { backgroundColor: cardColor }]} />
+                {entry.product_image ? (
+                  <Image 
+                    source={{ uri: entry.product_image }} 
+                    style={[styles.entryImage, { borderColor: cardColor }]} 
+                  />
+                ) : (
+                  <View style={[styles.entryImagePlaceholder, { borderColor: cardColor }]}>
+                    <Ionicons name="image-outline" size={24} color="#666666" />
                   </View>
-                  
-                  <View style={styles.entryInfo}>
-                    <Text style={styles.entryName} numberOfLines={2} ellipsizeMode="tail">
-                      {entry.product_name}
-                    </Text>
-                    {entry.product_brand && (
-                      <Text style={styles.entryBrand} numberOfLines={1} ellipsizeMode="tail">
-                        {entry.product_brand}
-                      </Text>
-                    )}
-                    
-                    {/* Punteggio salute con cuore */}
-                    <View style={styles.entryScoreContainer}>
-                      <Ionicons 
-                        name="heart" 
-                        size={18} 
-                        color={getHealthScoreColor(entry.health_score)} 
-                        style={styles.entryScoreIcon} 
-                      />
-                      <Text style={styles.entryScoreValue}>
-                        {entry.health_score || '--'}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              </TouchableOpacity>
-            </View>
-            
-            {/* Valori nutrizionali espandibili - SOPRA i pulsanti */}
-            {entry.showNutrition && (
-              <View style={styles.nutritionExpandedContainer}>
-                <View style={styles.entryNutrition}>
-                  <View style={styles.nutritionItem}>
-                    <View style={[styles.nutritionIconCircle, { backgroundColor: '#FFA07A' }]}>
-                      <Ionicons name="flame" size={16} color="#000000" />
-                    </View>
-                    <Text style={styles.nutritionLabel}>Calorie</Text>
-                    <Text style={styles.nutritionValue}>{Math.round(entry.kcal)}</Text>
-                  </View>
-                  <View style={styles.nutritionItem}>
-                    <View style={[styles.nutritionIconCircle, { backgroundColor: '#CD5C5C' }]}>
-                      <Ionicons name="barbell" size={16} color="#000000" />
-                    </View>
-                    <Text style={styles.nutritionLabel}>Proteine</Text>
-                    <Text style={styles.nutritionValue}>{Math.round(entry.proteins_g)}g</Text>
-                  </View>
-                  <View style={styles.nutritionItem}>
-                    <View style={[styles.nutritionIconCircle, { backgroundColor: '#FFD700' }]}>
-                      <Ionicons name="layers" size={16} color="#000000" />
-                    </View>
-                    <Text style={styles.nutritionLabel}>Carboidrati</Text>
-                    <Text style={styles.nutritionValue}>{Math.round(entry.carbs_g)}g</Text>
-                  </View>
-                  <View style={styles.nutritionItem}>
-                    <View style={[styles.nutritionIconCircle, { backgroundColor: '#87CEEB' }]}>
-                      <Ionicons name="cafe" size={16} color="#000000" />
-                    </View>
-                    <Text style={styles.nutritionLabel}>Grassi</Text>
-                    <Text style={styles.nutritionValue}>{Math.round(entry.fats_g)}g</Text>
-                  </View>
-                </View>
-                
-                {/* Descrizione della porzione */}
-                {entry.entry_type !== 'photo_meal' && entry.quantity_g && (
-                  <Text style={styles.portionDescription}>
-                    (Prodotto confezionato, valori per {Math.round(entry.quantity_g)}g)
-                  </Text>
-                )}
-                {entry.entry_type === 'photo_meal' && (
-                  <Text style={styles.portionDescription}>
-                    (Pasto fotografato, valori stimati)
-                  </Text>
                 )}
               </View>
-            )}
-            
-            {/* Pulsanti tratteggiati - SOTTO i valori nutrizionali */}
-            <View style={[styles.cardButtonsContainer, { marginTop: entry.showNutrition ? 12 : -8 }]}>
-              <TouchableOpacity
-                style={[styles.dashedButton, styles.dashedButtonNutrition]}
-                onPress={() => toggleNutritionVisibility(entry.id)}
-              >
-                <Ionicons 
-                  name={entry.showNutrition ? "chevron-up" : "chevron-down"} 
-                  size={20} 
-                  color={PRIMARY_GREEN} 
-                />
-                <Text style={[styles.dashedButtonText, styles.dashedButtonTextNutrition]}>
-                  {entry.showNutrition ? 'Nascondi' : 'Mostra'} Valori
-                </Text>
-              </TouchableOpacity>
               
-              <TouchableOpacity
-                style={[styles.dashedButton, styles.dashedButtonDelete]}
-                onPress={() => Alert.alert(
-                  'Rimuovi prodotto',
-                  'Sei sicuro di voler rimuovere questo prodotto dal tuo diario?',
-                  [
-                    { text: 'Annulla', style: 'cancel' },
-                    { text: 'Rimuovi', onPress: () => deleteEntry(entry.id) }
-                  ]
-                )}
-              >
-                <Ionicons name="trash-outline" size={18} color="#FF6B6B" />
-                <Text style={[styles.dashedButtonText, styles.dashedButtonTextDelete]}>
-                  Elimina
+              <View style={styles.entryInfo}>
+                <Text style={styles.entryName} numberOfLines={2} ellipsizeMode="tail" allowFontScaling={false}>
+                  {entry.product_name}
                 </Text>
+                
+                {/* Punteggio salute con pulsante colorato */}
+                <View style={styles.entryScoreContainer}>
+                  <View style={[styles.scoreButton, { backgroundColor: getScoreColor(entry.health_score) }]}>
+                    <Ionicons name="heart" size={14} color="#FFFFFF" />
+                    <Text style={styles.scoreButtonText}>
+                      {entry.health_score || '--'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Icone azioni - Visibili solo quando la card è espansa */}
+              {entry.showNutrition && (
+                <View style={styles.cardActionsHeader}>
+                  <TouchableOpacity 
+                    style={styles.headerActionButton}
+                    onPress={() => {
+                      if (entry.product_id) {
+                        navigation.navigate('ProductDetail', {
+                          productRecordId: entry.product_id,
+                          openedFromDiary: true
+                        });
+                      }
+                    }}
+                  >
+                    <Ionicons name="eye" size={22} color="#666666" />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity 
+                    style={styles.headerActionButton}
+                    onPress={() => Alert.alert(
+                      'Rimuovi dal Diario',
+                      `Vuoi rimuovere "${entry.product_name}" dal tuo diario?`,
+                      [
+                        { text: 'Annulla', style: 'cancel' },
+                        { text: 'Rimuovi', onPress: () => deleteEntry(entry.id), style: 'destructive' }
+                      ]
+                    )}
+                  >
+                    <Ionicons name="trash" size={22} color="#FF6B6B" />
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+
+                {/* Seconda riga: Valori nutrizionali (se espansi) */}
+                {entry.showNutrition && (
+                  <View style={styles.nutritionRowContainer}>
+
+                    {/* Grid 2x2 con i valori nutrizionali */}
+                    <View style={styles.nutritionGridContainer}>
+                      {/* Calorie */}
+                      <View style={styles.nutritionItemWrapper}>
+                        <View style={styles.nutritionItemContent}>
+                          <View style={[
+                            styles.nutritionIconContainer,
+                            { backgroundColor: '#FFA07A' }
+                          ]}>
+                            <Ionicons 
+                              name="flame" 
+                              size={22} 
+                              color="#000000" 
+                            />
+                          </View>
+                          
+                          <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                            {formatNumber(entry.kcal)} kcal
+                          </Text>
+                          
+                          <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                            Energia
+                          </Text>
+                          
+                          <View style={styles.nutritionProgressContainer}>
+                            <View style={[
+                              styles.nutritionProgressFill,
+                              { 
+                                width: `${Math.min((entry.kcal / 900) * 100, 100)}%`,
+                                backgroundColor: '#FFA07A'
+                              }
+                            ]} />
+                          </View>
+                        </View>
+                      </View>
+
+                      {/* Proteine */}
+                      <View style={styles.nutritionItemWrapper}>
+                        <View style={styles.nutritionItemContent}>
+                          <View style={[
+                            styles.nutritionIconContainer,
+                            { backgroundColor: '#CD5C5C' }
+                          ]}>
+                            <Ionicons 
+                              name="barbell" 
+                              size={22} 
+                              color="#000000" 
+                            />
+                          </View>
+                          
+                          <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                            {formatNumber(entry.proteins_g)}g
+                          </Text>
+                          
+                          <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                            Proteine
+                          </Text>
+                          
+                          <View style={styles.nutritionProgressContainer}>
+                            <View style={[
+                              styles.nutritionProgressFill,
+                              { 
+                                width: `${Math.min((entry.proteins_g / 50) * 100, 100)}%`,
+                                backgroundColor: '#CD5C5C'
+                              }
+                            ]} />
+                          </View>
+                        </View>
+                      </View>
+
+                      {/* Carboidrati */}
+                      <View style={styles.nutritionItemWrapper}>
+                        <View style={styles.nutritionItemContent}>
+                          <View style={[
+                            styles.nutritionIconContainer,
+                            { backgroundColor: '#FFD700' }
+                          ]}>
+                            <Ionicons 
+                              name="layers" 
+                              size={22} 
+                              color="#000000" 
+                            />
+                          </View>
+                          
+                          <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                            {formatNumber(entry.carbs_g)}g
+                          </Text>
+                          
+                          <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                            Carboidrati
+                          </Text>
+                          
+                          <View style={styles.nutritionProgressContainer}>
+                            <View style={[
+                              styles.nutritionProgressFill,
+                              { 
+                                width: `${Math.min((entry.carbs_g / 100) * 100, 100)}%`,
+                                backgroundColor: '#FFD700'
+                              }
+                            ]} />
+                          </View>
+                        </View>
+                      </View>
+
+                      {/* Grassi */}
+                      <View style={styles.nutritionItemWrapper}>
+                        <View style={styles.nutritionItemContent}>
+                          <View style={[
+                            styles.nutritionIconContainer,
+                            { backgroundColor: '#87CEEB' }
+                          ]}>
+                            <Ionicons 
+                              name="cafe" 
+                              size={22} 
+                              color="#000000" 
+                            />
+                          </View>
+                          
+                          <Text style={styles.nutritionValueText} allowFontScaling={false}>
+                            {formatNumber(entry.fats_g)}g
+                          </Text>
+                          
+                          <Text style={styles.nutritionLabelText} allowFontScaling={false}>
+                            Grassi
+                          </Text>
+                          
+                          <View style={styles.nutritionProgressContainer}>
+                            <View style={[
+                              styles.nutritionProgressFill,
+                              { 
+                                width: `${Math.min((entry.fats_g / 50) * 100, 100)}%`,
+                                backgroundColor: '#87CEEB'
+                              }
+                            ]} />
+                          </View>
+                        </View>
+                      </View>
+                    </View>
+
+                    {/* Descrizione sotto i valori nutrizionali */}
+                    <View style={[
+                      styles.nutritionInfoContainer,
+                      {
+                        backgroundColor: entry.health_score !== undefined 
+                          ? `${getScoreColor(entry.health_score)}15` 
+                          : '#F8F8F8',
+                        borderColor: entry.health_score !== undefined 
+                          ? `${getScoreColor(entry.health_score)}40` 
+                          : '#E5E5E5',
+                      }
+                    ]}>
+                      <Text style={styles.nutritionInfoText} allowFontScaling={false}>
+                        {entry.entry_type === 'photo_meal' 
+                          ? (
+                              <Text>
+                                Valori stimati per il <Text style={styles.boldText}>pasto</Text> fotografato
+                              </Text>
+                            )
+                          : entry.quantity_g 
+                            ? (
+                              <Text>
+                                Valori per <Text style={styles.boldText}>{formatNumber(entry.quantity_g)}g</Text> consumati
+                              </Text>
+                            )
+                            : 'Valori nutrizionali per 100g di prodotto'
+                        }
+                      </Text>
+                    </View>
+
+                  </View>
+                )}
               </TouchableOpacity>
             </View>
+
           </View>
-        ))}
+        );
+        })}
       </View>
     );
-  }, [entries, getHealthScoreColor, toggleNutritionVisibility, deleteEntry]);
+  }, [entries, toggleNutritionVisibility, deleteEntry]);
 
   // Componente skeleton per il caricamento
   const renderLoadingSkeleton = useCallback(() => (
-    <View style={styles.skeletonContainer}>
+    <View style={[styles.skeletonContainer, { paddingTop: Platform.OS === 'ios' ? 80 : 60 }]}>
       {/* Header skeleton */}
       <View style={styles.skeletonHeader}>
         <View style={styles.skeletonTitle} />
@@ -639,36 +851,28 @@ export default function CalorieTrackingScreen({ navigation }: Props) {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <View style={styles.container}>
         {renderLoadingSkeleton()}
-      </SafeAreaView>
+      </View>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={styles.container}>
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Tracking Calorie</Text>
-          <TouchableOpacity
-            style={styles.profileButton}
-            onPress={() => navigation.navigate('NutritionProfileSetup')}
-          >
-            <Ionicons name="person-circle-outline" size={28} color={BORDER_COLOR} />
-          </TouchableOpacity>
-        </View>
+
 
         {renderCalendar()}
         {renderNutritionSummary()}
         {renderAddProductButton()}
         {renderEntries()}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -679,25 +883,10 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    paddingTop: Platform.OS === 'android' ? 20 : 0,
+    paddingTop: Platform.OS === 'ios' ? 80 : 60, // Aumentato padding top come SalvatiScreen
     paddingBottom: 120, // Aumentato per evitare sovrapposizione con navbar
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    marginBottom: 20,
-  },
-  headerTitle: {
-    fontSize: 24,
-    fontFamily: 'BricolageGrotesque-Bold',
-    color: BORDER_COLOR,
-  },
-  profileButton: {
-    padding: 4,
-  },
+
   
   // Calendar - Design minimal
   calendarMinimal: {
@@ -711,7 +900,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   todayButtonTopText: {
-    fontSize: 14,
+    fontSize: scaleFont(14),
     fontFamily: 'BricolageGrotesque-Medium',
     color: PRIMARY_GREEN,
   },
@@ -733,13 +922,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   calendarMainDate: {
-    fontSize: 22, // Aumentato per più impatto
+    fontSize: scaleFont(22), // Aumentato per più impatto
     fontFamily: 'BricolageGrotesque-Bold',
     color: BORDER_COLOR,
     marginBottom: 2,
   },
   calendarSubDate: {
-    fontSize: 14,
+    fontSize: scaleFont(14),
     fontFamily: 'BricolageGrotesque-Regular',
     color: '#666666',
   },
@@ -765,7 +954,9 @@ const styles = StyleSheet.create({
     borderRadius: CARD_BORDER_RADIUS,
     borderWidth: CARD_BORDER_WIDTH,
     borderColor: BORDER_COLOR,
-    padding: 20,
+    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingBottom: 8,
     position: 'relative',
     zIndex: 1,
   },
@@ -773,13 +964,13 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   summaryTitle: {
-    fontSize: 18,
+    fontSize: scaleFont(18),
     fontFamily: 'BricolageGrotesque-Bold',
     color: BORDER_COLOR,
     marginBottom: 4,
   },
   summarySubtitle: {
-    fontSize: 14,
+    fontSize: scaleFont(14),
     fontFamily: 'BricolageGrotesque-Medium',
   },
   summaryRemaining: {
@@ -797,12 +988,12 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   calorieConsumed: {
-    fontSize: 32,
+    fontSize: scaleFont(32),
     fontFamily: 'BricolageGrotesque-Bold',
     color: BORDER_COLOR,
   },
   calorieTarget: {
-    fontSize: 16,
+    fontSize: scaleFont(16),
     fontFamily: 'BricolageGrotesque-Regular',
     color: '#666666',
     marginLeft: 8,
@@ -921,6 +1112,10 @@ const styles = StyleSheet.create({
     position: 'relative',
     marginBottom: 24, // Aumentato da 16
   },
+  entryCardWrapperExpanded: {
+    position: 'relative',
+    marginBottom: 28, // Ridotto da 40 a 28 per meno spazio
+  },
   entryCardShadow: {
     backgroundColor: 'black',
     borderRadius: 16,
@@ -934,19 +1129,25 @@ const styles = StyleSheet.create({
     flexDirection: 'column', // Cambiato a column per layout verticale
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    paddingTop: 24, // Padding superiore aumentato
-    paddingBottom: 15, // Padding inferiore uguale a quello superiore
-    paddingHorizontal: 18, // Padding orizzontale mantenuto
+    padding: 18, // Semplificato il padding come nel HomeScreen
     position: 'relative',
     zIndex: 1,
     borderWidth: 1.5,
     borderColor: '#000000',
-    minHeight: 150, // Altezza minima per contenere tutto il contenuto
+    height: 150, // Altezza fissa come nel HomeScreen invece di minHeight
+    justifyContent: 'flex-start', // Sempre flex-start per posizione fissa
+  },
+  entryCardContainerExpanded: {
+    height: 'auto', // Altezza automatica quando espansa
+    justifyContent: 'flex-start', // Sempre flex-start per posizione fissa
+    padding: 18, // Stesso padding per evitare spostamenti
+    paddingBottom: 15, // Padding bottom diverso per il contenuto espanso
   },
   entryFirstRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
+    alignItems: 'center', // Manteniamo questo per allineare immagine e contenuto
+    marginTop: 4.5, // Margine top fisso per centrare nella card chiusa (150px - 100px immagine - 36px padding = 14px / 2 = 7px circa, usiamo 16px)
+    marginBottom: 0, // Ridotto da 12 a 0 per centratura perfetta
   },
   entrySecondRow: {
     marginTop: 8,
@@ -994,6 +1195,31 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingLeft: 5, // Stesso padding delle card recenti
   },
+  expandIndicator: {
+    paddingLeft: 12,
+    justifyContent: 'center',
+  },
+  expandIndicatorBottom: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -25,
+    marginBottom: 14,
+  },
+  expandIndicatorLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E0E0E0',
+    marginHorizontal: 8,
+  },
+  expandIndicatorIconContainer: {
+    backgroundColor: '#F8F8F8',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
   entryName: {
     fontSize: 19, // Stessa dimensione delle card recenti
     fontFamily: 'BricolageGrotesque-Regular', // Stesso font delle card recenti
@@ -1013,7 +1239,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 4,
-    marginBottom: 8,
+    marginBottom: 0, // Cambiato da 8 a 0 per allineamento perfetto come HomeScreen
   },
   entryScoreIcon: {
     marginRight: 5, // Stesso margine delle card recenti
@@ -1022,6 +1248,110 @@ const styles = StyleSheet.create({
     fontSize: 15, // Stessa dimensione delle card recenti
     fontFamily: 'BricolageGrotesque-SemiBold', // Stesso font delle card recenti
     color: '#000000',
+  },
+  
+  // Nutrition Row Container - Dentro la card unificata
+  nutritionRowContainer: {
+    marginTop: 16, // Spazio dalla prima riga
+    paddingTop: 24, // Aumentato da 16 a 24
+    // Rimossa la riga grigia di separazione
+    alignSelf: 'stretch', // Assicura che si estenda per tutta la larghezza
+  },
+  nutritionGridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginBottom: -8,
+  },
+  nutritionItemWrapper: {
+    width: '48%', // Due colonne
+    marginBottom: 28,
+  },
+  nutritionItemContent: {
+    alignItems: 'center',
+  },
+  nutritionIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  nutritionValueRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+  nutritionValueText: {
+    fontSize: 18,
+    fontFamily: 'BricolageGrotesque-Bold',
+    color: BORDER_COLOR,
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  nutritionTargetText: {
+    fontSize: 14,
+    fontFamily: 'BricolageGrotesque-Regular',
+    color: '#666666',
+    textAlign: 'center',
+    marginLeft: 4,
+  },
+  nutritionLabelText: {
+    fontSize: 13,
+    fontFamily: 'BricolageGrotesque-Medium',
+    color: '#666666',
+    textAlign: 'center',
+  },
+  nutritionProgressContainer: {
+    width: '100%',
+    height: 4,
+    backgroundColor: 'rgba(0,0,0,0.1)',
+    borderRadius: 2,
+    marginTop: 8,
+    overflow: 'hidden',
+  },
+  nutritionProgressFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+  nutritionDiscretionNote: {
+    fontSize: scaleFont(13),
+    fontFamily: 'BricolageGrotesque-Regular',
+    color: '#666666',
+    textAlign: 'center',
+    marginBottom: 6,
+    fontStyle: 'italic',
+  },
+  nutritionInfoContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    marginTop: 8,
+    marginBottom: 4,
+    borderWidth: 1,
+  },
+  nutritionInfoText: {
+    fontSize: scaleFont(13),
+    fontFamily: 'BricolageGrotesque-Medium',
+    color: '#555555',
+    textAlign: 'center',
+  },
+  cardActionsHeader: {
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 12,
+    marginLeft: 8,
+  },
+  headerActionButton: {
+    padding: 8,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+  },
+  boldText: {
+    fontFamily: 'BricolageGrotesque-Bold',
+    fontWeight: '700',
   },
   entryNutrition: {
     flexDirection: 'row',
@@ -1058,32 +1388,51 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   deleteButton: {
-    position: 'absolute',
-    bottom: 12,
-    right: 12,
-    width: 36,
-    height: 36,
-    backgroundColor: '#FF6B6B',
-    borderRadius: 18,
-    justifyContent: 'center',
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
     borderWidth: 2,
-    borderColor: '#FFFFFF',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
-    elevation: 5,
+    borderStyle: 'dashed',
+    borderColor: '#FF6B6B',
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 107, 107, 0.05)',
+  },
+  deleteButtonText: {
+    color: '#FF6B6B',
+    fontSize: 14,
+    fontWeight: '600',
+    fontFamily: 'BricolageGrotesque-SemiBold',
   },
   
   // Stili per i pulsanti sotto la card
   cardButtonsContainer: {
     flexDirection: 'row',
-    marginTop: 0,
-    gap: 8,
+    marginTop: 15,
+    justifyContent: 'center',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 12, // Spazio tra i pulsanti
+    width: '100%',
+  },
+  secondaryButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 12,
+    backgroundColor: '#F8F8F8',
+  },
+  secondaryButtonText: {
+    color: '#666666',
+    fontSize: 14,
+    fontWeight: '500',
+    fontFamily: 'BricolageGrotesque-Medium',
   },
   dashedButton: {
     flex: 1,
@@ -1240,5 +1589,22 @@ const styles = StyleSheet.create({
     height: 15,
     backgroundColor: '#E0E0E0',
     borderRadius: 4,
+  },
+  // Stili per i pulsanti dei punteggi (copiati da RecentProductsSection)
+  scoreButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 20,
+    minWidth: 50,
+  },
+  scoreButtonText: {
+    fontSize: scaleFont(12),
+    fontFamily: "BricolageGrotesque-Bold",
+    color: '#FFFFFF',
+    marginLeft: 4,
+    letterSpacing: 0.2,
   },
 }); 

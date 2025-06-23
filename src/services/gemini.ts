@@ -40,9 +40,6 @@ export interface GeminiAnalysisResult {
   sustainabilityNeutrals?: Array<{title: string, detail: string}> // Elementi neutrali/intermedi per la sostenibilità
   productNameFromVision?: string // Nome prodotto identificato da Gemini Vision (opzionale)
   brandFromVision?: string // Marca identificata da Gemini Vision (opzionale)
-  nutriScoreExplanation?: string; // Spiegazione Nutri-Score (solo per prodotti con barcode)
-  novaExplanation?: string; // Spiegazione NOVA (solo per prodotti con barcode)
-  ecoScoreExplanation?: string; // Solo per prodotti con barcode
   
   // CAMPI SPECIFICI PER NUOVA ANALISI CALORIE FOTO
   calorie_estimation_type?: 'breakdown' | 'per_100g' | 'per_serving_packaged'; 
@@ -79,8 +76,8 @@ const google = createGoogleGenerativeAI({
 });
 
 // Configurazione dei modelli Google con AI SDK
-const geminiTextModel = google('gemini-2.0-flash-lite');
-const geminiVisionModel = google('gemini-2.0-flash-lite');
+const geminiTextModel = google('gemini-2.5-flash-lite-preview-06-17');
+const geminiVisionModel = google('gemini-2.5-flash-lite-preview-06-17');
 
 // Configurazioni ottimizzate per velocità massima (mantenute identiche)
 const GENERATION_CONFIG = {
@@ -104,12 +101,12 @@ const CALORIES_GENERATION_CONFIG = {
   maxTokens: 128,
 };
 
-// Timeout specifici per diversi tipi di chiamate
-const VISION_TIMEOUT = 25000; // 25 secondi per vision (immagini grandi)
-const PRODUCT_TIMEOUT = 15000; // 15 secondi per prodotti
-const CALORIES_TIMEOUT = 10000; // 10 secondi per calorie
+// Timeout specifici per diversi tipi di chiamate - OTTIMIZZATI PER VELOCITÀ
+const VISION_TIMEOUT = 15000; // 15 secondi per vision (ridotto da 25s)
+const PRODUCT_TIMEOUT = 10000; // 10 secondi per prodotti (ridotto da 15s)
+const CALORIES_TIMEOUT = 8000; // 8 secondi per calorie (ridotto da 10s)
 
-// Utility per ottimizzare immagini base64 (identica all'originale)
+// Utility per ottimizzare immagini base64 - MIGLIORATA PER VELOCITÀ
 const optimizeImageBase64 = (base64: string, mimeType: string): string => {
   // Calcola la dimensione approssimativa dell'immagine
   const sizeInBytes = (base64.length * 3) / 4;
@@ -117,18 +114,29 @@ const optimizeImageBase64 = (base64: string, mimeType: string): string => {
   
   console.log(`[IMAGE OPT] Immagine ${mimeType} dimensione: ${sizeInMB.toFixed(2)}MB`);
   
-  // Se l'immagine è troppo grande (>1.5MB), riduci drasticamente
-  if (sizeInMB > 1.5) {
-    console.log(`[IMAGE OPT] Immagine troppo grande (${sizeInMB.toFixed(2)}MB), compressione automatica...`);
+  // OTTIMIZZAZIONE AGGRESSIVA: Se l'immagine è >1MB, compressione drastica
+  if (sizeInMB > 1.0) { // Ridotto da 1.5MB a 1MB
+    console.log(`[IMAGE OPT] Immagine troppo grande (${sizeInMB.toFixed(2)}MB), compressione AGGRESSIVA...`);
     
-    // Compressione semplice: prendi solo una parte dell'immagine per ridurre dimensioni
-    // Questo è un approccio grezzo ma veloce per ridurre il payload
-    const compressionRatio = Math.min(0.7, 1.5 / sizeInMB); // Max 70% dell'originale
+    // Compressione aggressiva per velocità massima
+    const compressionRatio = Math.min(0.5, 1.0 / sizeInMB); // Max 50% dell'originale, più aggressiva
     const targetLength = Math.floor(base64.length * compressionRatio);
     const compressedBase64 = base64.substring(0, targetLength);
     
     const newSizeInMB = (compressedBase64.length * 3) / (4 * 1024 * 1024);
     console.log(`[IMAGE OPT] Immagine compressa a ${newSizeInMB.toFixed(2)}MB (${(compressionRatio * 100).toFixed(0)}% dell'originale)`);
+    
+    return compressedBase64;
+  }
+  
+  // Anche per immagini <1MB, applica una leggera compressione per velocità
+  if (sizeInMB > 0.5) {
+    const lightCompressionRatio = 0.8; // 80% dell'originale
+    const targetLength = Math.floor(base64.length * lightCompressionRatio);
+    const compressedBase64 = base64.substring(0, targetLength);
+    
+    const newSizeInMB = (compressedBase64.length * 3) / (4 * 1024 * 1024);
+    console.log(`[IMAGE OPT] Compressione leggera: ${newSizeInMB.toFixed(2)}MB (${(lightCompressionRatio * 100).toFixed(0)}% dell'originale)`);
     
     return compressedBase64;
   }
@@ -166,6 +174,13 @@ export const analyzeProductWithGeminiAiSdk = async (product: RawProductData): Pr
       topK: GENERATION_CONFIG.topK,
       topP: GENERATION_CONFIG.topP,
       maxTokens: GENERATION_CONFIG.maxTokens,
+      experimental_providerMetadata: {
+        google: {
+          generationConfig: {
+            responseMimeType: 'application/json'
+          }
+        }
+      }
     });
 
     console.timeEnd(`[GEMINI AI-SDK API TIMING] Chiamata API per ${product.code}`);
@@ -316,6 +331,13 @@ export const analyzeImageWithGeminiVisionAiSdk = async (
       topK: VISION_GENERATION_CONFIG.topK,
       topP: VISION_GENERATION_CONFIG.topP,
       maxTokens: VISION_GENERATION_CONFIG.maxTokens,
+      experimental_providerMetadata: {
+        google: {
+          generationConfig: {
+            responseMimeType: 'application/json'
+          }
+        }
+      }
     });
 
     console.timeEnd(`[GEMINI VISION AI-SDK API TIMING] Chiamata API Vision per ${productNameHint}`);
@@ -392,16 +414,47 @@ export const getCaloriesForSingleIngredientFromGeminiAiSdk = async (
 INGREDIENTE: "${name}"
 PESO: ${weightPrompt}
 
-CORREGGI NOME + STIMA NUTRIZIONALE:
+🧠 METODOLOGIA RIGOROSA PER STIMA NUTRIZIONALE:
+
+1. **IDENTIFICA CORRETTAMENTE**: Determina esattamente di che alimento si tratta
+   - Correggi errori di battitura (es. "pomodoroo" → "pomodoro")
+   - Specifica se crudo/cotto se rilevante (es. "pasta" → "pasta cotta" se nel contesto di un piatto)
+   - Usa nomi standard e chiari
+
+2. **STIMA PESO REALISTICA**: Se non specificato, usa porzioni REALI
+   - Frutta media: 150-200g (mela, pera, arancia)
+   - Verdure contorno: 80-120g 
+   - Carne porzione: 100-150g
+   - Pasta/riso cotti: 80-120g
+   - Formaggio grattugiato: 10-20g
+   - Olio condimento: 5-10g
+
+3. **VALORI NUTRIZIONALI PRECISI**: Usa database nutrizionali ufficiali
+   - Consulta valori USDA/CREA per l'alimento specifico
+   - Distingui tra crudo e cotto (pasta cruda 350 kcal/100g, cotta 150 kcal/100g)
+   - Arrotonda a 1 decimale per proteine/carbo/grassi
+   - Arrotonda a numero intero per calorie
+
+4. **CONTROLLO COERENZA**: Verifica che i valori siano sensati
+   - Calorie = (proteine × 4) + (carbo × 4) + (grassi × 9)
+   - Se i conti non tornano, ricontrolla i valori
+
+⚠️ ERRORI COMUNI DA EVITARE:
+❌ Confondere valori crudi con cotti
+❌ Porzioni irrealistiche (500g di pasta!)
+❌ Valori nutrizionali inventati
+❌ Calcoli matematici sbagliati
+
+CORREGGI NOME + STIMA NUTRIZIONALE PRECISA:
 
 JSON:
 {
-  "corrected_name": "[nome corretto]",
-  "estimated_calories_kcal": [numero o null],
-  "estimated_proteins_g": [numero o null],
-  "estimated_carbs_g": [numero o null],
-  "estimated_fats_g": [numero o null],
-  "error_message": "[vuoto se OK]"
+  "corrected_name": "[nome corretto e specifico]",
+  "estimated_calories_kcal": [numero intero o null],
+  "estimated_proteins_g": [numero con 1 decimale o null],
+  "estimated_carbs_g": [numero con 1 decimale o null],
+  "estimated_fats_g": [numero con 1 decimale o null],
+  "error_message": "[vuoto se OK, descrivi problema se presente]"
 }`;
 
     // Stima token del prompt (approssimativa: 1 token ≈ 4 caratteri per l'italiano)
@@ -433,6 +486,13 @@ JSON:
       topK: CALORIES_GENERATION_CONFIG.topK,
       topP: CALORIES_GENERATION_CONFIG.topP,
       maxTokens: CALORIES_GENERATION_CONFIG.maxTokens,
+      experimental_providerMetadata: {
+        google: {
+          generationConfig: {
+            responseMimeType: 'application/json'
+          }
+        }
+      }
     });
 
     console.timeEnd(`[GEMINI CALORIES AI-SDK TIMING] API call per "${name}"`);
@@ -510,8 +570,9 @@ JSON:
 
 /**
  * Crea un prompt dettagliato per l'analisi del prodotto con criteri scientifici come Yuka
+ * Include condizionalmente le informazioni del profilo utente se fornite
  */
-const createAnalysisPrompt = (product: RawProductData): string => {
+const createAnalysisPrompt = (product: RawProductData, userProfile?: any): string => {
   const formatField = (value: string | string[] | number | null | undefined, defaultValue: string = "N/A") => {
     if (Array.isArray(value) && value.length > 0) return value.join(', ');
     if (value === null || value === undefined) return defaultValue;
@@ -536,28 +597,129 @@ const createAnalysisPrompt = (product: RawProductData): string => {
 
   // Determina se c'è Nutri-Score per le istruzioni specifiche
   const hasNutriScore = product.nutrition_grades && product.nutrition_grades.toLowerCase() !== 'unknown';
-  const hasEcoScore = product.ecoscore_grade && product.ecoscore_grade.toLowerCase() !== 'unknown';
+  const hasEcoScore = product.ecoscore_grade && 
+                      product.ecoscore_grade.toLowerCase() !== 'unknown' && 
+                      product.ecoscore_grade.toLowerCase() !== 'not-applicable' &&
+                      product.ecoscore_grade.toLowerCase() !== '' &&
+                      product.ecoscore_grade.toLowerCase() !== 'null' &&
+                      product.ecoscore_grade.toLowerCase() !== 'undefined';
   
-  return `
+  // Controlla se è acqua pura
+  const isWater = product.product_name?.toLowerCase().includes('acqua') && 
+                  !product.product_name?.toLowerCase().includes('aromatizzata') &&
+                  !product.product_name?.toLowerCase().includes('gassata con') &&
+                  !product.product_name?.toLowerCase().includes('vitaminizzata') &&
+                  (product.nutriments?.energy_kcal_100g === 0 || !product.nutriments?.energy_kcal_100g);
+  
+  // Sezione profilo utente - aggiunta condizionalmente
+  let userInfo = '';
+  if (userProfile && (userProfile.profile || (userProfile.goals && userProfile.goals.length > 0))) {
+    userInfo = "\n\nPROFILO UTENTE:\n";
+    
+    if (userProfile.profile) {
+      userInfo += `- ID Utente: ${userProfile.profile.user_id}\n`;
+    } else {
+      userInfo += `- Profilo base non configurato\n`;
+    }
+
+    if (userProfile.goals && userProfile.goals.length > 0) {
+      userInfo += "\nOBIETTIVI DI SALUTE:\n";
+      userProfile.goals.forEach((goal: any, index: number) => {
+        userInfo += `${index + 1}. ${goal.name}: ${goal.description}\n`;
+      });
+    } else {
+      userInfo += "\nNessun obiettivo di salute specifico impostato.\n";
+    }
+  }
+  
+  return `${userInfo}
 PRODOTTO: ${formatField(product.product_name)} | ${formatField(product.brands)}
 INGREDIENTI: ${formatField(product.ingredients_text)}
+ADDITIVI: ${formatField(product.additives_tags)}
 VALORI/100g: ${formatNutriment(product.nutriments?.energy_kcal_100g, "kcal")} | Grassi:${formatNutriment(product.nutriments?.fat_100g)}g | Carbo:${formatNutriment(product.nutriments?.carbohydrates_100g)}g | Proteine:${formatNutriment(product.nutriments?.proteins_100g)}g | Sale:${formatNutriment(product.nutriments?.salt_100g)}g
 SCORE ESISTENTI: Nutri:${formatField(product.nutrition_grades?.toUpperCase())} | Nova:${formatField(product.nova_group)} | Eco:${formatField(product.ecoscore_grade?.toUpperCase())}
 ${estimateNutritionPrompt}
 
-ANALISI NUTRIZIONALE SCIENTIFICA STILE YUKA:
+ANALISI NUTRIZIONALE SCIENTIFICA STILE YUKA${userProfile ? ' PERSONALIZZATA' : ''}:
 
-HEALTH SCORE (1-100): Basato SOLO su impatto nutrizionale e sanitario
-${hasNutriScore ? `Nutri-Score: A=85-98, B=68-84, C=42-67, D=18-41, E=1-17` : `Riferimenti: Naturali non processati=80-95, Processati=30-60, Ultra-processati=5-25`}
-NOVA: Gruppo 1=+0, 2=-5, 3=-15, 4=-25 punti
+🚨 CASO SPECIALE ACQUA: Se il prodotto è ACQUA PURA NATURALE (senza additivi, aromi, vitamine), assegna SEMPRE healthScore: 100
 
-SOSTENIBILITÀ: ${hasEcoScore ? `Eco-Score: A=84-97, B=63-83, C=39-62, D=16-38, E=1-15` : `0 - Ecoscore non disponibile`}
+HEALTH SCORE${userProfile ? ' PERSONALIZZATO' : ''} (1-100): Basato SOLO su impatto nutrizionale e sanitario
+${hasNutriScore ? `
+MAPPATURA NUTRI-SCORE UFFICIALE (usa ESATTAMENTE questi intervalli):
+• Nutri-Score E → 1-20 punti (prodotti molto scadenti)
+• Nutri-Score D → 21-40 punti (prodotti scadenti) 
+• Nutri-Score C → 41-60 punti (prodotti medi)
+• Nutri-Score B → 61-90 punti (prodotti buoni)
+• Nutri-Score A → 91-100 punti (prodotti eccellenti)
 
-COSA VALUTARE (SOLO ASPETTI NUTRIZIONALI/SANITARI e INFORMAZIONI/CURIOSITÀ SCIENTIFICHE SCIENTIFICHE VALIDE):
+Considera anche i fattori NOVA, additivi, e qualità ingredienti per affinare il punteggio nell'intervallo Nutri-Score.${userProfile ? '\nPOI PERSONALIZZA in base agli obiettivi utente (±15 punti per allineamento agli obiettivi)' : ''}` : `
+RIFERIMENTI SCIENTIFICI INTERNAZIONALI (consulta database nutrizionali WHO/FAO/EFSA):
+• Alimenti naturali integrali: 85-100 (frutta fresca, verdure, cereali integrali)
+• Minimamente processati: 65-84 (yogurt naturale, formaggi freschi, pane integrale)
+• Processati: 35-64 (conserve, salumi, formaggi stagionati)
+• Ultra-processati: 10-34 (snack industriali, bevande zuccherate, dolci confezionati)
+• Ad alto rischio nutrizionale: 1-9 (prodotti con additivi nocivi, trans grassi)
+
+🎯 USA TUTTO IL RANGE!! IMPORTANTE!!! Usa punteggi precisi come 23, 47, 68, 84, 93, etc, non usare assolutamente il 15!
+🚨 IMPORTANTE: Anche con Nutri-Score ufficiale, usa punteggi PRECISI nell'intervallo (es. Nutri-C = 41-60, usa 43, 52, 58, NON 50!)${userProfile ? '\nPOI PERSONALIZZA in base agli obiettivi utente (±15 punti per allineamento agli obiettivi)' : ''}`}
+
+NOVA: Gruppo 1=+0, 2=-5, 3=-15, 4=-25 punti (modifica il punteggio base)
+
+VALUTAZIONE ADDITIVI (secondo EFSA/FDA/studi internazionali):
+🟢 SICURI/BENEFICI: E300-E309 (antiossidanti naturali), E306-E309 (tocoferoli), E330 (acido citrico), E440 (pectine), E407 (carragenina), probiotici
+🟡 NEUTRI/STANDARD: E322 (lecitina), E415 (gomma di xantano), E412 (gomma di guar), E471 (mono/digliceridi)
+🔴 CONTROVERSI/DANNOSI: E250/E252 (nitriti/nitrati), E621 (glutammato), E102/E110/E122/E124/E129 (coloranti azoici), E320/E321 (BHA/BHT), E951 (aspartame in eccesso), E220-E228 (solfiti), E200-E203 (acido sorbico)
+
+ISTRUZIONI ADDITIVI:
+- Crea un contro/neutro PER OGNI ADDITIVO che consideri quasi sicuro o proprio dannoso, usando una classificazione scientifica EFSA/FDA
+- Includi il codice E nel titolo quando disponibile
+- Includi il codice E nel titolo quando disponibile
+- Spiega il meccanismo d'azione e i rischi/benefici nel dettaglio
+- Devi sottrarre 10 punti al health score per ogni additivo che consideri dannoso o controverso oppure 5 per ogni additivo che consideri neutro o sicuro.
+${userProfile ? `
+- PERSONALIZZA la valutazione in base agli obiettivi utente (es. se vuole "ridurre infiammazione" penalizza additivi pro-infiammatori)` : ''}
+
+SOSTENIBILITÀ: ${hasEcoScore ? `Eco-Score: A=84-97, B=63-83, C=39-62, D=16-38, E=1-15` : `0 - Ecoscore non disponibile - NON GENERARE PRO/CONTRO/NEUTRI SOSTENIBILITÀ`}${userProfile ? `
+
+ISTRUZIONI SCIENTIFICHE AVANZATE PERSONALIZZATE:
+1. PERSONALIZZA IL PUNTEGGIO in base al profilo e obiettivi dell'utente
+2. Per ogni PRO/CONTRO deve GIUSTIFICARE come si collega agli obiettivi di salute
+3. Includi considerazioni scientifiche OLTRE ai valori nutrizionali di base:
+   - Biodisponibilità dei nutrienti
+   - Interazioni tra composti bioattivi
+   - Impatti sui pathways metabolici
+   - Effetti sulla microbiota intestinale
+   - Cronobiologia nutrizionale
+   - Sinergie nutrizionali
+
+MAPPATURA OBIETTIVI SCIENTIFICI:
+• "Supportare salute ossea" → Calcio biodisponibile, vitamina D, vitamina K2, rapporto Ca/Mg
+• "Ridurre infiammazione" → Omega-3, polifenoli, curcumina, flavonoidi, rapporto omega-6/omega-3
+• "Migliorare concentrazione" → Colina, omega-3 DHA, antiossidanti neurotropi, stabilità glicemica
+• "Mantenere peso forma" → Indice glicemico, sazietà proteica, termogenesi, cronoritmità metabolica
+• "Migliorare digestione" → Fibre prebiotiche, enzimi digestivi, pH gastrico, diversità microbiotica
+• "Supportare sistema immunitario" → Vitamina C, zinco, selenio, beta-glucani, immunomodulatori
+• "Aumentare energia e vitalità" → Complesso B, ferro eme/non-eme, coenzima Q10, stabilità insulinica
+• "Migliorare qualità del sonno" → Melatonina precursori, magnesio, evitare caffeina, timing carboidrati
+• "Migliorare salute cardiovascolare" → Nitrati, steroli vegetali, omega-3, flavonoidi vasculoprotettivi
+• "Aumentare massa muscolare" → Leucina, timing proteico, aminoacidi essenziali, finestra anabolica
+
+REGOLE AVANZATE:
+1. Se l'utente ha obiettivo "peso forma" → penalizza densità calorica e zuccheri aggiunti
+2. Se l'utente vuole "massa muscolare" → premia proteine complete e timing post-workout
+3. Se l'utente vuole "sonno migliore" → penalizza caffeina, premia magnesio e triptofano
+4. Se l'utente vuole "salute cardiovascolare" → premia omega-3, fibra solubile, steroli vegetali
+5. Se l'utente vuole "ridurre infiammazione" → premia antiossidanti, penalizza omega-6 eccessivi` : ''}
+
+COSA VALUTARE (SOLO ASPETTI NUTRIZIONALI/SANITARI e INFORMAZIONI/CURIOSITÀ SCIENTIFICHE VALIDE):
+
 
 ⚠️ IMPORTANTE: NON creare PRO/CONTRO/NEUTRI per Nutri-Score, NOVA o Eco-Score! 
-L'app gestisce automaticamente questi score con le tue spiegazioni.
-Fornisci SOLO le spiegazioni nei campi dedicati (nutriScoreExplanation, novaExplanation, ecoScoreExplanation).
+L'app aggiunge automaticamente le descrizioni standard per questi score.
+NON includere campi nutriScoreExplanation, novaExplanation, ecoScoreExplanation nel JSON.
+
+🚨 REGOLA ECOSCORE: ${hasEcoScore ? 'Eco-Score disponibile ma NON GENERARE sustainabilityPros/Cons/Neutrals per il punteggio Eco-Score stesso - l\'app aggiunge automaticamente la descrizione standard. Genera solo sustainabilityPros/Cons/Neutrals per ALTRI aspetti ambientali (packaging, origine, trasporto, etc.)' : 'ECOSCORE NON DISPONIBILE (unknown/not-applicable) - NON GENERARE NESSUN sustainabilityPros/Cons/Neutrals - lascia array COMPLETAMENTE VUOTI []!'}
 
 PRO - Identifica SOLO se presenti (ESCLUSI Nutri-Score, NOVA, Eco-Score):
 ✅ Vitamine/minerali in quantità significative (>15% RDA)
@@ -568,154 +730,235 @@ PRO - Identifica SOLO se presenti (ESCLUSI Nutri-Score, NOVA, Eco-Score):
 ✅ Basso contenuto di sodio (<0.3g/100g)
 ✅ Assenza di zuccheri aggiunti
 ✅ Assenza di additivi problematici
-✅ Informazioni/curiosità scentifiche interessanti però SCIENTIFICHE che prendi da linee guida internazionali
+✅ Additivi sicuri/benefici (es. E300-Vitamina C, E306-Tocoferoli, probiotici)
+✅ Informazioni/curiosità scientifiche interessanti BASATE su linee guida internazionali WHO/FAO/EFSA
 
 CONTRO - Identifica SOLO se presenti (ESCLUSI Nutri-Score, NOVA, Eco-Score):
 ❌ Eccesso di zuccheri (>15g/100g o >22.5g/porzione)
 ❌ Eccesso di grassi saturi (>5g/100g)
 ❌ Eccesso di sodio (>1.5g/100g)
-❌ Additivi controversi (E250, E621, coloranti artificiali)
+❌ Additivi controversi/dannosi secondo EFSA/FDA (E250-nitriti, E621-glutammato, E102-tartrazina, E110-giallo tramonto, E122-azorubina, E124-rosso cocciniglia, E129-rosso allura, BHA-E320, BHT-E321, E951-aspartame in eccesso)
 ❌ Grassi trans (>0.2g/100g)
 ❌ Alto indice glicemico con zuccheri semplici
 ❌ Ultra-processamento (NOVA 4)
-❌ Informazioni/curiosità scentifiche interessanti però SCIENTIFICHE che prendi da linee guida internazionali
+❌ Informazioni/curiosità scientifiche interessanti BASATE su linee guida internazionali WHO/FAO/EFSA
 
 NEUTRI - Usa per aspetti non rilevanti o bilanciati (ESCLUSI Nutri-Score, NOVA, Eco-Score):
 ➖ Nutrienti presenti ma in quantità normali
 ➖ Aspetti che non impattano significativamente la salute
 ➖ Caratteristiche standard per la categoria
 
-FORMATO TITOLI OBBLIGATORIO QUANDO PARLI DI VALORI NUTRIZIONALI:
-PRO: "[Nutriente]: [numero]mg/g/% (Stima AI)" o "[Nutriente]: [numero]mg/g/% ([fonte dati])"
-CONTRO: "[Problema]: [numero]g/mg (Stima AI)" o "[Problema]: [numero]g/mg ([fonte dati])"  
-NEUTRO: "[Aspetto]: [numero]g/kcal (valore standard)"
+🚨 REGOLE FERREE PER TITOLI PRO/CONTRO/NEUTRALI:
+❌ MAI usare parentesi nei titoli o specificazioni tecniche  
+❌ MAI aggiungere "(Stima AI)" o "(fonte dati)" nei titoli
+❌ MAI usare due punti seguiti da specificazioni nel titolo
+✅ SEMPRE titoli SEMPLICI, DIRETTI e DISCORSIVI
+✅ Massimo 4-5 parole per titolo
+✅ Stile naturale come una conversazione
+✅ AGGIUNGI I NUMERI QUANDO DISPONIBILI per giustificare (es. "Basso contenuto proteine 5g")
+
+ESEMPI TITOLI CORRETTI (OBBLIGATORI):
+PRO: "Proteine di alta qualità"
+PRO: "Ricco di fibre 8g"  
+PRO: "Basso contenuto sodio 0.2g"
+PRO: "Vitamina C elevata 89mg"
+CONTRO: "Grassi saturi elevati 12g"
+CONTRO: "Zuccheri eccessivi 25g"
+CONTRO: "Alto contenuto sodio 1.8g" 
+CONTRO: "Basso contenuto proteine 2g"
+NEUTRO: "Apporto calorico standard"
+NEUTRO: "Contenuto proteico moderato 8g"
+
+ESEMPI TITOLI SBAGLIATI (DA EVITARE):
+❌ "Vitamina C: 89mg/100g (99% RDA)"
+❌ "Zuccheri: 25g/100g (125% limite OMS)"
+❌ "Sodio: 1.8g/100g (Stima AI)"
+❌ "Proteine: 2.1g/100g (valore standard)"
 
 REGOLE FERREE:
 ❌ MAI dire "0g di X" come CONTRO (è neutro o positivo!)
+❌ MAI creare neutri per "ASSENZA" di nutrienti (es. "Assenza di proteine" - VIETATO!)
 ❌ MAI valutare effetti psicologici (concentrazione, energia mentale)
 ❌ MAI commentare sapore, texture, appetibilità
 ❌ MAI giustificare con frasi tipo "normale per la categoria"
 ❌ MAI inventare problemi inesistenti
-❌ MAI usare "stimata/stimati/stimato" - USA "(Stima AI)" dopo il numero
-
 
 ✅ SOLO valutazioni nutrizionali oggettive con soglie scientifiche
-✅ SOLO quantità misurabili con riferimenti OMS/EFSA
-✅ USA neutri per aspetti non significativi
-✅ TITOLI con NUMERI PRECISI e fonte dati
+✅ SOLO quantità misurabili con riferimenti WHO/FAO/EFSA
+✅ USA neutri SOLO per nutrienti PRESENTI ma in quantità standard/non rilevanti
+✅ TITOLI SEMPLICI con NUMERI quando disponibili per giustificare
 ✅ Sii conciso e ottimizzato per velocità
+✅ PUNTEGGI PRECISI: usa 23, 47, 68, 84, 93 invece di 25, 50, 70, 85, 95
+🚨 IMPORTANTE: Anche con Nutri-Score ufficiale, usa punteggi PRECISI nell'intervallo (es. Nutri-C = 41-60, usa 43, 52, 58, NON 50!)
 
-ESEMPI CORRETTI TITOLI:
-PRO: "Vitamina C: 89mg/100g (99% RDA)"
-PRO: "Fibre: 8.2g/100g (Stima AI)"
-CONTRO: "Zuccheri: 25g/100g (125% limite OMS)"
-CONTRO: "Sodio: 1.8g/100g (Stima AI)"
-NEUTRO: "Proteine: 2.1g/100g (valore standard)"
-NEUTRO: "Calorie: 245kcal/100g (densità normale)"
+🚀 OTTIMIZZAZIONE TOKEN OUTPUT:
+- Mantieni il dettaglio scientifico ma usa frasi CONCISE e DIRETTE
+- Evita ripetizioni e frasi di riempimento
+- Usa abbreviazioni scientifiche standard (es: "RDA" invece di "dose giornaliera raccomandata")
+- Combina concetti correlati in una singola frase quando possibile
+- Massimo 2 righe per campo "detail" nei pro/contro/neutrali
+- Campo "analysis": descrivi in modo chiaro, breve e conciso le proprietà del prodotto, scientifico e vai dritto al punto, breve emax 200 caratteri.
+- Spiegazioni score: 1 frase concisa per ciascuna
 
 JSON OTTIMIZZATO:
 {
-  "healthScore": [numero 1-100],
+  "healthScore": [numero PRECISO da 1-100, non usare multipli di 5],
   "sustainabilityScore": [${hasEcoScore ? 'numero 1-100' : '0'}],
   "analysis": "[max 2 frasi: composizione + impatto nutrizionale]",
   "pros": [{"title":"[Nutriente]: [numero][unità] ([fonte])","detail":"[significato sanitario + riferimento scientifico]"}],
   "cons": [{"title":"[Problema]: [numero][unità] ([fonte])","detail":"[rischio sanitario + soglia limite]"}],
   "neutrals": [{"title":"[Aspetto]: [numero][unità] (valore standard)","detail":"[descrizione neutra]"}],
 
-
   "sustainabilityPros": [${hasEcoScore ? '{"title":"[aspetto]","detail":"[dato]"}' : ''}],
   "sustainabilityCons": [${hasEcoScore ? '{"title":"[problema]","detail":"[impatto]"}' : ''}],
-  "sustainabilityNeutrals": [],
-
-  "nutriScoreExplanation": "[1 frase metodologia]",
-  "novaExplanation": "[1 frase processamento]",
-  "ecoScoreExplanation": "${hasEcoScore ? '[1 frase calcolo]' : 'Non disponibile'}"
+  "sustainabilityNeutrals": [${hasEcoScore ? '' : ''}]
   ${missingNutritionalInfo ? `,"estimated_energy_kcal_100g":[numero],"estimated_proteins_100g":[numero],"estimated_carbs_100g":[numero],"estimated_fats_100g":[numero]` : ''}
 }`;
 };
 
 /**
  * Crea un prompt dettagliato per l'analisi visiva del prodotto con criteri scientifici come Yuka
+ * Include condizionalmente le informazioni del profilo utente se fornite
  */
-const createVisualAnalysisPrompt = (productNameHint: string): string => {
-    return `
-ANALISI VISIVA CIBO: ${productNameHint}
+const createVisualAnalysisPrompt = (productNameHint: string, userProfile?: any): string => {
+  // Sezione profilo utente - aggiunta condizionalmente
+  let userInfo = '';
+  if (userProfile && (userProfile.profile || (userProfile.goals && userProfile.goals.length > 0))) {
+    userInfo = "PROFILO UTENTE:\n";
+    
+    if (userProfile.profile) {
+      userInfo += `- ID Utente: ${userProfile.profile.user_id}\n`;
+    } else {
+      userInfo += `- Profilo base non configurato\n`;
+    }
 
-ANALISI NUTRIZIONALE SCIENTIFICA STILE YUKA:
+    if (userProfile.goals && userProfile.goals.length > 0) {
+      userInfo += "\nOBIETTIVI DI SALUTE:\n";
+      userProfile.goals.forEach((goal: any, index: number) => {
+        userInfo += `${index + 1}. ${goal.name}: ${goal.description}\n`;
+      });
+    } else {
+      userInfo += "\nNessun obiettivo di salute specifico impostato.\n";
+    }
+    userInfo += "\n";
+  }
 
-HEALTH SCORE (1-100): Basato SOLO su composizione nutrizionale identificata
-Riferimenti:
-- Alimenti naturali integrali: 85-95
-- Minimamente processati: 70-84  
-- Processati: 40-69
-- Ultra-processati: 10-39
-- Ad alto rischio: 1-15
+  return `${userInfo}ANALISI VISIVA CIBO: ${productNameHint}
+
+ANALISI NUTRIZIONALE SCIENTIFICA STILE YUKA${userProfile ? ' PERSONALIZZATA' : ''}:
+
+🚨 CASO SPECIALE ACQUA: Se il prodotto è ACQUA PURA NATURALE (senza additivi, aromi, vitamine), assegna SEMPRE healthScore: 100
+
+HEALTH SCORE${userProfile ? ' PERSONALIZZATO' : ''} (1-100): Basato SOLO su composizione nutrizionale identificata
+RIFERIMENTI SCIENTIFICI INTERNAZIONALI (consulta database nutrizionali WHO/FAO/EFSA):
+• Alimenti naturali integrali: 85-100 (frutta fresca, verdure crude, cereali integrali, legumi)
+• Minimamente processati: 65-84 (yogurt naturale, formaggi freschi, pane integrale, pesce al vapore)
+• Processati: 35-64 (conserve vegetali, salumi artigianali, formaggi stagionati, pane bianco)
+• Ultra-processati: 10-34 (snack industriali, bevande zuccherate, dolci confezionati, fritture)
+• Ad alto rischio nutrizionale: 1-9 (prodotti con additivi nocivi, trans grassi, eccesso zuccheri/sodio)
+
+🎯 USA TUTTO IL RANGE: Non limitarti a multipli di 5! Usa punteggi precisi come 23, 47, 68, 84, 93, etc.
+Considera processamento visibile, metodi di cottura, qualità ingredienti per punteggio preciso.${userProfile ? '\nPOI PERSONALIZZA in base agli obiettivi utente (±15 punti per allineamento agli obiettivi)' : ''}
 
 SOSTENIBILITÀ: 0 - "Ecoscore non disponibile per analisi foto"
 
-METODOLOGIA:
-1. Identifica precisamente il cibo
-2. Stima composizione nutrizionale da database scientifici
-3. Valuta processamento visibile
-4. Calcola score nutrizionale
-5. Identifica pro/contro/neutri oggettivi
+METODOLOGIA SCIENTIFICA${userProfile ? ' PERSONALIZZATA' : ''}:
+1. Identifica precisamente il cibo consultando database nutrizionali internazionali
+2. Stima composizione nutrizionale basata su linee guida WHO/FAO/EFSA
+3. Valuta processamento visibile secondo classificazione NOVA
+4. Calcola score nutrizionale con criteri scientifici oggettivi
+5. Identifica pro/contro/neutri basati su evidenze nutrizionali${userProfile ? `
+6. PERSONALIZZA IL PUNTEGGIO in base al profilo e obiettivi dell'utente
+7. Per ogni PRO/CONTRO GIUSTIFICA come si collega agli obiettivi di salute
 
-COSA VALUTARE (SOLO ASPETTI NUTRIZIONALI/SANITARI):
+MAPPATURA OBIETTIVI SCIENTIFICI:
+• "Supportare salute ossea" → Calcio biodisponibile, vitamina D, vitamina K2, rapporto Ca/Mg
+• "Ridurre infiammazione" → Omega-3, polifenoli, curcumina, flavonoidi, rapporto omega-6/omega-3  
+• "Migliorare concentrazione" → Colina, omega-3 DHA, antiossidanti neurotropi, stabilità glicemica
+• "Mantenere peso forma" → Indice glicemico, sazietà proteica, termogenesi, cronoritmità metabolica
+• "Migliorare digestione" → Fibre prebiotiche, enzimi digestivi, pH gastrico, diversità microbiotica
+• "Supportare sistema immunitario" → Vitamina C, zinco, selenio, beta-glucani, immunomodulatori
+• "Aumentare energia e vitalità" → Complesso B, ferro eme/non-eme, coenzima Q10, stabilità insulinica
+• "Migliorare qualità del sonno" → Melatonina precursori, magnesio, evitare caffeina, timing carboidrati
+• "Migliorare salute cardiovascolare" → Nitrati, steroli vegetali, omega-3, flavonoidi vasculoprotettivi
+• "Aumentare massa muscolare" → Leucina, timing proteico, aminoacidi essenziali, finestra anabolica
 
-PRO - Identifica SOLO se stimabili:
-✅ Vitamine/minerali significativi (>15% RDA)
-✅ Fibre (>3g/100g)
-✅ Proteine di qualità visibili
-✅ Grassi buoni identificabili
-✅ Antiossidanti naturali stimabili
-✅ Basso sodio (<0.3g/100g)
+REGOLE AVANZATE:
+1. Se l'utente ha obiettivo "peso forma" → penalizza densità calorica e zuccheri aggiunti
+2. Se l'utente vuole "massa muscolare" → premia proteine complete e timing post-workout
+3. Se l'utente vuole "sonno migliore" → penalizza caffeina, premia magnesio e triptofano
+4. Se l'utente vuole "salute cardiovascolare" → premia omega-3, fibra solubile, steroli vegetali
+5. Se l'utente vuole "ridurre infiammazione" → premia antiossidanti, penalizza omega-6 eccessivi` : ''}
+
+COSA VALUTARE (SOLO ASPETTI NUTRIZIONALI/SANITARI BASATI SU EVIDENZE SCIENTIFICHE):
+
+PRO - Identifica SOLO se stimabili con riferimenti WHO/FAO/EFSA:
+✅ Vitamine/minerali significativi (>15% RDA secondo linee guida internazionali)
+✅ Fibre alimentari (>3g/100g secondo raccomandazioni WHO)
+✅ Proteine di qualità visibili (aminoacidi essenziali completi)
+✅ Grassi buoni identificabili (omega-3, monoinsaturi)
+✅ Antiossidanti naturali stimabili (polifenoli, carotenoidi, vitamina C)
+✅ Basso sodio (<0.3g/100g secondo WHO)
 ✅ Nessun zucchero aggiunto visibile
+✅ Cottura salutare (vapore, griglia senza carbonizzazione)
 
-CONTRO - Identifica SOLO se stimabili:
-❌ Zuccheri eccessivi (>15g/100g)
-❌ Grassi saturi eccessivi (>5g/100g)
-❌ Sodio eccessivo (>1.5g/100g)
-❌ Frittura/cottura ad alte temperature visibile
-❌ Processamento industriale evidente
-❌ Additivi/conservanti visibili
+CONTRO - Identifica SOLO se stimabili con soglie scientifiche WHO/FAO/EFSA:
+❌ Zuccheri eccessivi (>15g/100g secondo linee guida WHO)
+❌ Grassi saturi eccessivi (>5g/100g secondo raccomandazioni FAO)
+❌ Sodio eccessivo (>1.5g/100g secondo soglie WHO)
+❌ Frittura/cottura ad alte temperature visibile (formazione acrilamide/AGE)
+❌ Processamento industriale evidente (classificazione NOVA 4)
+❌ Additivi/conservanti visibili (coloranti artificiali, conservanti chimici)
+❌ Densità calorica eccessiva per categoria (>400 kcal/100g per snack)
 
-NEUTRI - Per aspetti standard:
-➖ Nutrienti in quantità normali per la categoria
-➖ Aspetti che non impattano significativamente
-➖ Caratteristiche bilanciate
+NEUTRI - SOLO per nutrienti PRESENTI in quantità standard:
+➖ Nutrienti presenti in quantità normali per la categoria (secondo EFSA)
+➖ Aspetti presenti che non impattano significativamente (evidenze scientifiche limitate)
+➖ Caratteristiche presenti e bilanciate per tipologia alimentare
+❌ MAI dire "Assenza di X" o "Mancanza di Y" - VIETATO!
 
-FORMATO TITOLI OBBLIGATORIO:
-PRO: "[Nutriente]: [numero]mg/g/% (Stima AI)" 
-CONTRO: "[Problema]: [numero]g/mg (Stima AI)"
-NEUTRO: "[Aspetto]: [numero]g/kcal (densità normale)"
+🚨 REGOLE FERREE PER TITOLI PRO/CONTRO/NEUTRALI:
+❌ MAI usare parentesi nei titoli o specificazioni tecniche
+❌ MAI aggiungere numeri o unità di misura nei titoli
+❌ MAI usare due punti seguiti da specificazioni nel titolo
+✅ SEMPRE titoli SEMPLICI, DIRETTI e DISCORSIVI
+✅ Massimo 4-5 parole per titolo
+✅ Stile naturale come una conversazione
+
+ESEMPI TITOLI CORRETTI (OBBLIGATORI):
+PRO: "Proteine di alta qualità"
+PRO: "Ferro biodisponibile"  
+PRO: "Antiossidanti dalle verdure"
+PRO: "Fibre per la digestione"
+CONTRO: "Grassi saturi elevati"
+CONTRO: "Zuccheri aggiunti"
+CONTRO: "Sodio eccessivo" 
+NEUTRO: "Apporto calorico standard"
+NEUTRO: "Contenuto proteico moderato"
+
+ESEMPI TITOLI SBAGLIATI (DA EVITARE):
+❌ "Vitamina C: 65mg/100g (Stima AI)"
+❌ "Zuccheri: 18g/100g (Stima AI)"
+❌ "Sodio: 1.2g/100g (Stima AI)"
+❌ "Calorie: 52kcal/100g (densità normale)"
 
 REGOLE FERREE:
 ❌ MAI dire "0g di X" come CONTRO
+❌ MAI creare neutri per "ASSENZA" di nutrienti (es. "Assenza di proteine" - VIETATO!)
 ❌ MAI valutare effetti psicologici/energetici
-❌ MAI commentare aspetto estetico
+❌ MAI commentare aspetto estetico o gusto/sapore
 ❌ MAI inventare problemi inesistenti
-❌ MAI frasi vaghe o non quantificate
-❌ MAI usare "stimata/stimati/stimato" - USA "(Stima AI)"
-
-✅ SOLO stime nutrizionali concrete con NUMERI
-✅ SOLO impatti sanitari misurabili
-✅ USA neutri per aspetti non rilevanti
-✅ TITOLI SCIENTIFICI con VALORI PRECISI
+✅ SOLO stime nutrizionali oggettive basate su database WHO/FAO/EFSA
+✅ USA neutri SOLO per nutrienti PRESENTI ma in quantità standard/non rilevanti
+✅ TITOLI SEMPLICI E DISCORSIVI
 ✅ Massima concisione per velocità
-
-ESEMPI CORRETTI TITOLI:
-PRO: "Vitamina C: 65mg/100g (Stima AI)"
-PRO: "Fibre: 3.1g/100g (Stima AI)"
-CONTRO: "Zuccheri: 18g/100g (Stima AI)"
-CONTRO: "Sodio: 1.2g/100g (Stima AI)"
-NEUTRO: "Calorie: 52kcal/100g (densità normale)"
-NEUTRO: "Proteine: 1.8g/100g (valore standard)"
+✅ PUNTEGGI PRECISI: usa 23, 47, 68, 84, 93 invece di 25, 50, 70, 85, 95
 
 REGOLE NOME E DESCRIZIONE:
 ❌ MAI nomi come "Pane (tipologia non definita, probabilmente...)" → USA "Pane"
 ❌ MAI frasi generiche come "importante per la salute"
 ✅ Nome max 3 parole (es: "Pane integrale", "Pizza margherita")
-✅ Analisi DIRETTA sui valori nutrizionali
+✅ Analisi DIRETTA sui valori nutrizionali basata su evidenze scientifiche
 
 TIPOLOGIA PRODOTTO - DETERMINA CORRETTAMENTE:
 
@@ -724,6 +967,39 @@ TIPOLOGIA PRODOTTO - DETERMINA CORRETTAMENTE:
 - Usa "calorie_estimation_type": "breakdown" 
 - Includi "ingredients_breakdown" con ingredienti stimati
 - "calories_estimate": "Totale: ~[numero] kcal"
+
+🧠 METODOLOGIA RIGOROSA PER STIMA PESI E CALORIE PASTI:
+
+1. **ANALISI VISIVA PRECISA**: Osserva ATTENTAMENTE le proporzioni degli ingredienti nel piatto
+   - Stima la dimensione del piatto (standard ~25cm diametro)
+   - Calcola la superficie occupata da ogni ingrediente
+   - Considera l'altezza/spessore di ogni componente
+
+2. **STIMA PESI REALISTICI**: Usa porzioni REALI, non teoriche
+   - Pasta: 180g (non 100g sempre!)
+   - Carne: 100-150g per porzione principale
+   - Verdure crude: 50-100g per contorno
+   - Verdure cotte: 80-120g (perdono volume)
+   - Formaggio grattugiato: 10-20g (non 50g!)
+   - Olio/condimenti: 5-15g (non esagerare!)
+
+3. **CALORIE PRECISE PER PESO**: Usa database nutrizionali REALI
+   - Pollo petto: ~165 kcal/100g
+   - Manzo magro: ~200 kcal/100g
+   - Verdure crude: 15-30 kcal/100g
+   - Olio oliva: ~900 kcal/100g (attento alle quantità!)
+
+5. **INGREDIENTI NASCOSTI**: Non dimenticare
+   - Olio di cottura (5-10g = 45-90 kcal)
+   - Sale/spezie (trascurabili per kcal)
+   - Burro/margarina se visibili
+   - Salse/condimenti
+
+⚠️ ERRORI COMUNI DA EVITARE:
+❌ Sovrastimare le porzioni (100g di tutto non è realistico)
+❌ Dimenticare che la cottura cambia peso e densità
+❌ Non considerare l'olio di cottura
+❌ Calcoli matematici sbagliati nel breakdown
 
 📦 PRODOTTO CONFEZIONATO (per_100g): TUTTO ciò che è INDUSTRIALE, con CONFEZIONE, MARCA, ETICHETTA
 - Esempi OBBLIGATORI: biscotti, crackers, snack, merendine, cioccolato, caramelle, chips, cereali, yogurt confezionato, succhi, bevande
@@ -736,35 +1012,86 @@ TIPOLOGIA PRODOTTO - DETERMINA CORRETTAMENTE:
 
 REGOLA FERREA: Se vedi MARCA/BRAND = prodotto confezionato, NON pasto!
 
+🚀 OTTIMIZZAZIONE TOKEN OUTPUT:
+- Mantieni il dettaglio scientifico ma usa frasi CONCISE e DIRETTE
+- Evita ripetizioni e frasi di riempimento
+- Usa abbreviazioni scientifiche standard (es: "RDA" invece di "dose giornaliera raccomandata")
+- Combina concetti correlati in una singola frase quando possibile
+- Massimo 2 righe per campo "detail" nei pro/contro/neutrali
+- Campo "analysis": descrivi in modo chiaro, breve e conciso le proprietà del prodotto, scientifico e vai dritto al punto, breve emax 200 caratteri.
+
 JSON OTTIMIZZATO:
+
+🚨 REGOLE FERREE PER NOMI INGREDIENTI:
+❌ MAI scrivere peso nel nome: "Pasta (100g)"
+❌ MAI errori di battitura: "Scotttona" 
+❌ MAI specificazioni tecniche nel nome dell'ingrediente
+✅ SEMPRE nomi PULITI e SEMPLICI: "Pasta", "Scottona", "Pomodoro"
+✅ Il peso va SOLO nel campo "estimated_weight_g"
+✅ Controlla SEMPRE l'ortografia
 
 PER PASTI (solo piatti cucinati/fatti in casa):
 {
   "productNameFromVision": "Pasta Pomodoro",
   "brandFromVision": null,
-  "healthScore": [numero 1-100],
+  "healthScore": [numero PRECISO 1-100, non usare multipli di 5],
   "analysis": "[analisi valori nutrizionali]",
-  "pros": [{"title":"[Nutriente]: [numero][unità] (Stima AI)","detail":"[dettaglio]"}],
-  "cons": [{"title":"[Problema]: [numero][unità] (Stima AI)","detail":"[dettaglio]"}],
-  "neutrals": [{"title":"[Aspetto]: [numero][unità] (valore standard)","detail":"[dettaglio]"}],
+  "pros": [{"title":"[TITOLO SEMPLICE]","detail":"[dettaglio con numeri e spiegazione]"}],
+  "cons": [{"title":"[TITOLO SEMPLICE]","detail":"[dettaglio con numeri e spiegazione]"}],
+  "neutrals": [{"title":"[TITOLO SEMPLICE]","detail":"[dettaglio]"}],
   "calorie_estimation_type": "breakdown",
-  "ingredients_breakdown": [{"id":1,"name":"Pasta","estimated_weight_g":100,"estimated_calories_kcal":350,"estimated_proteins_g":12,"estimated_carbs_g":70,"estimated_fats_g":2}],
-  "calories_estimate": "Totale: ~500 kcal",
+  "ingredients_breakdown": [
+    {
+      "id": 1,
+      "name": "Pasta",
+      "estimated_weight_g": 125, (hai visto? è un numero preciso ce devi capire bene in base alla foto il peso)
+      "estimated_calories_kcal": 350,
+      "estimated_proteins_g": 4.5,
+      "estimated_carbs_g": 27,
+      "estimated_fats_g": 1.1
+    },
+    {
+      "id": 2, 
+      "name": "Pomodoro",
+      "estimated_weight_g": 80,
+      "estimated_calories_kcal": 14,
+      "estimated_proteins_g": 0.9,
+      "estimated_carbs_g": 2.7,
+      "estimated_fats_g": 0.2
+    },
+    {
+      "id": 3,
+      "name": "Olio oliva",
+      "estimated_weight_g": 8,
+      "estimated_calories_kcal": 72,
+      "estimated_proteins_g": 0,
+      "estimated_carbs_g": 0,
+      "estimated_fats_g": 8
+    }
+  ],
+  "calories_estimate": "Totale: ~221 kcal",
   "sustainabilityScore": 0,
   "sustainabilityPros": [],
   "sustainabilityCons": [],
   "sustainabilityNeutrals": []
 }
 
+
+- Pomodoro 80g × 0.18 kcal/g = 14 kcal  
+- Olio 8g × 9 kcal/g = 72 kcal
+- TOTALE: 135 + 14 + 72 = 221 kcal ✅
+
+
+
 PER PRODOTTI CONFEZIONATI (biscotti, snack, merendine con marca):
 {
   "productNameFromVision": "Tarallucci",
   "brandFromVision": "Mulino Bianco",
-  "healthScore": 45,
+  "healthScore": [numero PRECISO 1-100, non per forza multipli di 5],
   "analysis": "[analisi valori nutrizionali]",
-  "pros": [{"title":"[Nutriente]: [numero][unità] (Stima AI)","detail":"[dettaglio]"}],
-  "cons": [{"title":"[Problema]: [numero][unità] (Stima AI)","detail":"[dettaglio]"}],
-  "neutrals": [{"title":"[Aspetto]: [numero][unità] (valore standard)","detail":"[dettaglio]"}],
+  "pros": [{"title":"[TITOLO SEMPLICE]","detail":"[dettaglio con numeri e spiegazione]"}],
+  "cons": [{"title":"[TITOLO SEMPLICE]","detail":"[dettaglio con numeri e spiegazione]"}],
+  "neutrals": [{"title":"[TITOLO SEMPLICE]","detail":"[dettaglio]"}],
   "calorie_estimation_type": "per_100g",
   "estimated_energy_kcal_100g": 450,
   "estimated_proteins_100g": 8,
@@ -784,6 +1111,11 @@ PER PRODOTTI CONFEZIONATI (biscotti, snack, merendine con marca):
 const parseGeminiResponse = (response: string, isPhotoAnalysis: boolean = false): GeminiAnalysisResult => {
   try {
     console.log(`[GEMINI AI-SDK PARSE] Inizio parsing della risposta (lunghezza: ${response.length} caratteri). Foto: ${isPhotoAnalysis}`);
+    
+    // *** DEBUG: MOSTRA LA RISPOSTA COMPLETA ***
+    console.log(`[GEMINI AI-SDK PARSE DEBUG] RISPOSTA COMPLETA RICEVUTA:`);
+    console.log(`"${response}"`);
+    console.log(`[GEMINI AI-SDK PARSE DEBUG] FINE RISPOSTA COMPLETA`);
 
     // Cerca il JSON nella risposta con regex più robusta
     let jsonStr = '';
@@ -792,6 +1124,7 @@ const parseGeminiResponse = (response: string, isPhotoAnalysis: boolean = false)
     if (jsonMatch) {
       jsonStr = jsonMatch[0];
       console.log(`[GEMINI AI-SDK PARSE] JSON trovato nella risposta (lunghezza: ${jsonStr.length} caratteri)`);
+      console.log(`[GEMINI AI-SDK PARSE DEBUG] JSON ESTRATTO: "${jsonStr}"`);
       
       // Verifica che il JSON sia bilanciato (stesso numero di { e })
       const openBraces = (jsonStr.match(/\{/g) || []).length;
@@ -820,6 +1153,9 @@ const parseGeminiResponse = (response: string, isPhotoAnalysis: boolean = false)
           console.log(`[GEMINI AI-SDK PARSE] JSON riparato, nuova lunghezza: ${jsonStr.length} caratteri`);
         }
       }
+    } else {
+      console.error(`[GEMINI AI-SDK PARSE ERROR] NESSUN JSON TROVATO! Risposta non contiene { }`);
+      console.log(`[GEMINI AI-SDK PARSE DEBUG] Primi 100 caratteri: "${response.substring(0, 100)}"`);
     }
     
     if (jsonStr) {
@@ -847,6 +1183,11 @@ const parseGeminiResponse = (response: string, isPhotoAnalysis: boolean = false)
       
       if (!Array.isArray(result.sustainabilityNeutrals)) {
         result.sustainabilityNeutrals = [];
+      }
+
+      // Assicurati che sustainabilityScore sia 0 se non disponibile o nullo
+      if (typeof result.sustainabilityScore !== "number" || result.sustainabilityScore < 0) {
+        result.sustainabilityScore = 0;
       }
 
       if (!coreHealthFieldsPresent) {
@@ -906,7 +1247,7 @@ const createFallbackResult = (response: string): GeminiAnalysisResult => {
   
   return {
     healthScore: 50,
-    sustainabilityScore: 50,
+    sustainabilityScore: 0, // Imposta 0 quando non disponibile
     analysis: "Analisi non disponibile a causa di un errore di parsing.",
     pros: [],
     cons: [],
@@ -942,7 +1283,7 @@ export const analyzeProductWithUserPreferences = async (
     }
 
     // Costruisci un prompt personalizzato
-    const personalizedPrompt = createPersonalizedAnalysisPrompt(product, userProfile);
+    const personalizedPrompt = createAnalysisPrompt(product, userProfile);
     console.log(`[GEMINI PERSONALIZED PROMPT] Prompt personalizzato generato per ${product.code} (lunghezza: ${personalizedPrompt.length} caratteri)`);
 
     // *** LOG DELL'INPUT AI PERSONALIZZATO ***
@@ -961,6 +1302,13 @@ export const analyzeProductWithUserPreferences = async (
       topK: GENERATION_CONFIG.topK,
       topP: GENERATION_CONFIG.topP,
       maxTokens: GENERATION_CONFIG.maxTokens,
+      experimental_providerMetadata: {
+        google: {
+          generationConfig: {
+            responseMimeType: 'application/json'
+          }
+        }
+      }
     });
 
     console.timeEnd(`[GEMINI PERSONALIZED API TIMING] Chiamata API personalizzata per ${product.code}`);
@@ -1012,134 +1360,7 @@ export const analyzeProductWithUserPreferences = async (
   }
 };
 
-/**
- * Crea un prompt personalizzato per l'analisi di un prodotto basato sulle preferenze utente
- */
-const createPersonalizedAnalysisPrompt = (product: RawProductData, userProfile: any): string => {
-  const formatField = (value: string | string[] | number | null | undefined, defaultValue: string = "N/A") => {
-    if (value === null || value === undefined || value === "") return defaultValue;
-    if (Array.isArray(value)) return value.join(", ");
-    return String(value);
-  };
 
-  const formatNutriment = (value: number | undefined | null, unit: string = "g", defaultValue: string = "N/A") => {
-    if (value === null || value === undefined || isNaN(value)) return defaultValue;
-    return `${value}${unit}`;
-  };
-
-  // Informazioni profilo utente
-  const profile = userProfile.profile;
-  const goals = userProfile.goals;
-
-  let userInfo = "PROFILO UTENTE:\n";
-  
-  if (profile) {
-    userInfo += `- ID Utente: ${profile.user_id}\n`;
-  } else {
-    userInfo += `- Profilo base non configurato\n`;
-  }
-
-  if (goals && goals.length > 0) {
-    userInfo += "\nOBIETTIVI DI SALUTE:\n";
-    goals.forEach((goal: any, index: number) => {
-      userInfo += `${index + 1}. ${goal.name}: ${goal.description}\n`;
-    });
-            } else {
-    userInfo += "\nNessun obiettivo di salute specifico impostato.\n";
-  }
-
-  return `
-Sei un esperto nutrizionista e biologo nutrizionale. Analizza questo prodotto considerando SPECIFICAMENTE il profilo e gli obiettivi dell'utente.
-
-${userInfo}
-
-PRODOTTO DA ANALIZZARE:
-Nome: ${formatField(product.product_name)}
-Marca: ${formatField(product.brands)}
-Codice a barre: ${formatField(product.code)}
-Ingredienti: ${formatField(product.ingredients_text)}
-Categoria: ${formatField(product.categories)}
-
-INFORMAZIONI NUTRIZIONALI (per 100g):
-- Energia: ${formatNutriment(product.nutriments?.energy_kcal_100g, " kcal")}
-- Grassi: ${formatNutriment(product.nutriments?.fat_100g)}
-- Grassi saturi: ${formatNutriment(product.nutriments?.saturated_fat_100g)}
-- Carboidrati: ${formatNutriment(product.nutriments?.carbohydrates_100g)}
-- Zuccheri: ${formatNutriment(product.nutriments?.sugars_100g)}
-- Fibre: ${formatNutriment(product.nutriments?.fiber_100g)}
-- Proteine: ${formatNutriment(product.nutriments?.proteins_100g)}
-- Sale: ${formatNutriment(product.nutriments?.salt_100g)}
-
-PUNTEGGI ESISTENTI:
-- Nutri-Score: ${formatField(product.nutrition_grades)}
-- Nova Score: ${formatField(product.nova_group)}
-- Eco-Score: ${formatField(product.ecoscore_grade)}
-
-⚠️ IMPORTANTE: NON creare PRO/CONTRO/NEUTRI per Nutri-Score, NOVA o Eco-Score! 
-L'app gestisce automaticamente questi score con le tue spiegazioni.
-Fornisci SOLO le spiegazioni nei campi dedicati (nutriScoreExplanation, novaExplanation, ecoScoreExplanation).
-
-ISTRUZIONI SCIENTIFICHE AVANZATE:
-1. PERSONALIZZA IL PUNTEGGIO in base al profilo e obiettivi dell'utente
-2. Per ogni PRO/CONTRO deve GIUSTIFICARE come si collega agli obiettivi di salute
-3. Includi considerazioni scientifiche OLTRE ai valori nutrizionali di base:
-   - Biodisponibilità dei nutrienti
-   - Interazioni tra composti bioattivi
-   - Impatti sui pathways metabolici
-   - Effetti sulla microbiota intestinale
-   - Cronobiologia nutrizionale
-   - Sinergie nutrizionali
-
-MAPPATURA OBIETTIVI SCIENTIFICI:
-• "Supportare salute ossea" → Calcio biodisponibile, vitamina D, vitamina K2, rapporto Ca/Mg
-• "Ridurre infiammazione" → Omega-3, polifenoli, curcumina, flavonoidi, rapporto omega-6/omega-3
-• "Migliorare concentrazione" → Colina, omega-3 DHA, antiossidanti neurotropi, stabilità glicemica
-• "Mantenere peso forma" → Indice glicemico, sazietà proteica, termogenesi, cronoritmità metabolica
-• "Migliorare digestione" → Fibre prebiotiche, enzimi digestivi, pH gastrico, diversità microbiotica
-• "Supportare sistema immunitario" → Vitamina C, zinco, selenio, beta-glucani, immunomodulatori
-• "Aumentare energia e vitalità" → Complesso B, ferro eme/non-eme, coenzima Q10, stabilità insulinica
-• "Migliorare qualità del sonno" → Melatonina precursori, magnesio, evitare caffeina, timing carboidrati
-• "Migliorare salute cardiovascolare" → Nitrati, steroli vegetali, omega-3, flavonoidi vasculoprotettivi
-• "Aumentare massa muscolare" → Leucina, timing proteico, aminoacidi essenziali, finestra anabolica
-
-REGOLE AVANZATE:
-1. Se l'utente ha obiettivo "peso forma" → penalizza densità calorica e zuccheri aggiunti
-2. Se l'utente vuole "massa muscolare" → premia proteine complete e timing post-workout
-3. Se l'utente vuole "sonno migliore" → penalizza caffeina, premia magnesio e triptofano
-4. Se l'utente vuole "salute cardiovascolare" → premia omega-3, fibra solubile, steroli vegetali
-5. Se l'utente vuole "ridurre infiammazione" → premia antiossidanti, penalizza omega-6 eccessivi
-
-ESEMPI TITOLI SCIENTIFICI CORRETTI:
-PRO: "Omega-3 EPA: 250mg/100g (anti-infiammatorio per i tuoi obiettivi)"
-PRO: "Leucina: 2.1g/100g (ottimale per sintesi proteica muscolare)"
-PRO: "Polifenoli: 180mg GAE/100g (neuroprotezione e concentrazione)"
-CONTRO: "Acido arachidonico: elevato (pro-infiammatorio vs tuo obiettivo)"
-CONTRO: "Indice glicemico: 75 (destabilizza energia vs tuoi obiettivi)"
-NEUTRO: "Calcio: 120mg/100g (contributo moderato salute ossea)"
-
-Rispondi SOLO con un JSON valido nel seguente formato:
-{
-  "healthScore": [numero da 1 a 100, PESATO per obiettivi utente],
-  "sustainabilityScore": [numero da 1 a 100],
-  "analysis": "[2-3 frasi: identificazione + profilo nutrizionale PERSONALIZZATO per obiettivi]",
-  "pros": [
-    {"title": "[Composto/Nutriente]: [valore] (beneficio per [obiettivo specifico])", "detail": "[meccanismo scientifico + rilevanza per obiettivi utente]"}
-  ],
-  "cons": [
-    {"title": "[Problema]: [valore] (contrasta [obiettivo specifico])", "detail": "[meccanismo + perché problematico per obiettivi utente]"}
-  ],
-  "neutrals": [
-    {"title": "[Aspetto]: [valore] (rilevanza moderata)", "detail": "[valutazione neutra contestualizzata]"}
-  ],
-  "sustainabilityPros": [{"title": "[titolo]", "detail": "[dettaglio]"}],
-  "sustainabilityCons": [{"title": "[titolo]", "detail": "[dettaglio]"}],
-  "sustainabilityNeutrals": [{"title": "[titolo]", "detail": "[dettaglio]"}],
-  "nutriScoreExplanation": "[spiegazione Nutri-Score personalizzata per obiettivi]",
-  "novaExplanation": "[spiegazione NOVA personalizzata per obiettivi]",
-  "ecoScoreExplanation": "[spiegazione Eco-Score]"
-}
-  `;
-};
 
 /**
  * Analizza un'immagine di cibo utilizzando le preferenze utente per personalizzare i risultati
@@ -1169,7 +1390,7 @@ export const analyzeImageWithUserPreferences = async (
     }
 
     // Costruisci un prompt personalizzato per l'analisi visiva
-    const personalizedVisualPrompt = createPersonalizedVisualAnalysisPrompt(productNameHint, userProfile);
+    const personalizedVisualPrompt = createVisualAnalysisPrompt(productNameHint, userProfile);
     console.log(`[GEMINI VISION PERSONALIZED PROMPT] Prompt personalizzato generato per ${productNameHint} (lunghezza: ${personalizedVisualPrompt.length} caratteri)`);
 
     // Ottimizzazione dell'immagine
@@ -1205,6 +1426,13 @@ export const analyzeImageWithUserPreferences = async (
       topK: GENERATION_CONFIG.topK,
       topP: GENERATION_CONFIG.topP,
       maxTokens: GENERATION_CONFIG.maxTokens,
+      experimental_providerMetadata: {
+        google: {
+          generationConfig: {
+            responseMimeType: 'application/json'
+          }
+        }
+      }
     });
 
     console.timeEnd(`[GEMINI VISION PERSONALIZED API TIMING] Chiamata API Vision personalizzata per ${productNameHint}`);
@@ -1258,166 +1486,29 @@ export const analyzeImageWithUserPreferences = async (
   }
 };
 
-/**
- * Crea un prompt personalizzato per l'analisi visiva di un prodotto basato sulle preferenze utente
- */
-const createPersonalizedVisualAnalysisPrompt = (productNameHint: string, userProfile: any): string => {
-  // Informazioni profilo utente
-  const profile = userProfile.profile;
-  const goals = userProfile.goals;
-
-  let userInfo = "PROFILO UTENTE:\n";
-  
-  if (profile) {
-    userInfo += `- ID Utente: ${profile.user_id}\n`;
-  } else {
-    userInfo += `- Profilo base non configurato\n`;
-  }
-
-  if (goals && goals.length > 0) {
-    userInfo += "\nOBIETTIVI DI SALUTE:\n";
-    goals.forEach((goal: any, index: number) => {
-      userInfo += `${index + 1}. ${goal.name}: ${goal.description}\n`;
-    });
-  } else {
-    userInfo += "\nNessun obiettivo di salute specifico impostato.\n";
-  }
-
-  return `
-Sei un esperto nutrizionista e biologo nutrizionale. Analizza questo cibo nell'immagine considerando SPECIFICAMENTE il profilo e gli obiettivi dell'utente.
-
-${userInfo}
-
-CIBO DA ANALIZZARE: ${productNameHint}
-
-ISTRUZIONI SCIENTIFICHE AVANZATE:
-1. PERSONALIZZA IL PUNTEGGIO in base al profilo e obiettivi dell'utente
-2. Per ogni PRO/CONTRO deve GIUSTIFICARE come si collega agli obiettivi di salute
-3. Includi considerazioni scientifiche OLTRE ai valori nutrizionali di base:
-   - Biodisponibilità dei nutrienti visibili
-   - Metodi di cottura e impatto nutrizionale
-   - Interazioni tra ingredienti identificati
-   - Effetti sulla microbiota intestinale
-   - Cronobiologia nutrizionale del timing
-
-MAPPATURA OBIETTIVI SCIENTIFICI:
-• "Supportare salute ossea" → Calcio biodisponibile, vitamina D, vitamina K2, rapporto Ca/Mg
-• "Ridurre infiammazione" → Omega-3, polifenoli, curcumina, flavonoidi, rapporto omega-6/omega-3  
-• "Migliorare concentrazione" → Colina, omega-3 DHA, antiossidanti neurotropi, stabilità glicemica
-• "Mantenere peso forma" → Indice glicemico, sazietà proteica, termogenesi, cronoritmità metabolica
-• "Migliorare digestione" → Fibre prebiotiche, enzimi digestivi, pH gastrico, diversità microbiotica
-• "Supportare sistema immunitario" → Vitamina C, zinco, selenio, beta-glucani, immunomodulatori
-• "Aumentare energia e vitalità" → Complesso B, ferro eme/non-eme, coenzima Q10, stabilità insulinica
-• "Migliorare qualità del sonno" → Melatonina precursori, magnesio, evitare caffeina, timing carboidrati
-• "Migliorare salute cardiovascolare" → Nitrati, steroli vegetali, omega-3, flavonoidi vasculoprotettivi
-• "Aumentare massa muscolare" → Leucina, timing proteico, aminoacidi essenziali, finestra anabolica
-
-REGOLE AVANZATE:
-1. Se l'utente ha obiettivo "peso forma" → penalizza densità calorica e zuccheri aggiunti
-2. Se l'utente vuole "massa muscolare" → premia proteine complete e timing post-workout
-3. Se l'utente vuole "sonno migliore" → penalizza caffeina, premia magnesio e triptofano
-4. Se l'utente vuole "salute cardiovascolare" → premia omega-3, fibra solubile, steroli vegetali
-5. Se l'utente vuole "ridurre infiammazione" → premia antiossidanti, penalizza omega-6 eccessivi
-
-REGOLE NOME E DESCRIZIONE:
-❌ MAI nomi come "Pane (tipologia non definita, probabilmente...)" → USA "Pane"
-❌ MAI frasi generiche come "l'analisi si concentra sui tuoi obiettivi"
-❌ MAI dire ovvietà tipo "importante per la salute"
-❌ MAI meta-descrizioni tipo "L'analisi si concentra sui valori nutrizionali per 100g"
-✅ Nome max 3 parole (es: "Pane integrale", "Pizza margherita", "Insalata")
-✅ Campo "analysis" deve essere DESCRITTIVO del prodotto (es: "Biscotti ricchi di zuccheri e grassi saturi, con farina di frumento e burro. Elevata densità calorica e moderato contenuto proteico.")
-✅ Descrivi COSA È il prodotto e le sue caratteristiche nutrizionali principali
-
-REGOLE PRO/CONTRO/NEUTRALI:
-❌ NON usare valori numerici precisi nei titoli per prodotti fotografati (es: "Grassi saturi: 15g")
-✅ USA descrizioni qualitative per prodotti fotografati (es: "Grassi saturi: elevati")
-✅ Valori numerici SOLO se hai dati nutrizionali precisi da barcode
-✅ Sempre collegare al profilo utente nella spiegazione (detail)
-
-ESEMPI TITOLI SCIENTIFICI CORRETTI:
-
-PER PRODOTTI CON BARCODE (dati nutrizionali precisi):
-PRO: "Omega-3 EPA: 250mg (anti-infiammatorio per i tuoi obiettivi)"
-PRO: "Leucina: 2.1g (ottimale per sintesi proteica muscolare)"
-PRO: "Polifenoli: 180mg GAE (neuroprotezione e concentrazione)"
-CONTRO: "Acidi grassi trans: presenti (pro-infiammatori vs tuo obiettivo)"
-CONTRO: "Indice glicemico alto: 75 (destabilizza energia vs tuoi obiettivi)"
-NEUTRO: "Calcio: 120mg (contributo moderato salute ossea)"
-
-PER PRODOTTI FOTOGRAFATI (stime visive):
-PRO: "Carboidrati complessi: energia sostenuta"
-PRO: "Fibre visibili: supporto digestivo"
-CONTRO: "Zuccheri aggiunti: elevati (destabilizza glicemia)"
-CONTRO: "Grassi saturi: presenti (infiammazione vs tuoi obiettivi)"
-CONTRO: "Densità calorica: alta (contrasta peso forma)"
-NEUTRO: "Sale: presente (moderare consumo)"
-
-ESEMPI CAMPO "analysis" CORRETTI:
-✅ "Biscotti da forno con farina di frumento, burro e miele. Elevato contenuto di carboidrati (60g/100g) e grassi saturi (23g/100g). Densità calorica alta con 480 kcal per 100g."
-✅ "Snack confezionato ricco di zuccheri semplici e oli vegetali. Moderato apporto proteico (6g/100g) e presenza di conservanti. Prodotto ultra-processato categoria NOVA 4."
-✅ "Cereali integrali con frutta secca e semi. Buona fonte di fibre (8g/100g) e proteine vegetali (12g/100g). Presenza di vitamine del gruppo B e minerali."
-
-ESEMPI CAMPO "analysis" SBAGLIATI:
-❌ "Gli Alveari Mulino Bianco, con burro salato e miele, sono un prodotto da forno confezionato. L'analisi si concentra sui valori nutrizionali per 100g, considerando gli obiettivi dell'utente."
-❌ "Questo prodotto viene analizzato in base ai tuoi obiettivi di salute specifici."
-❌ "L'analisi nutrizionale tiene conto delle tue preferenze alimentari."
-
-🚨 REGOLA FERREA CLASSIFICAZIONE PRODOTTI 🚨
-PRIMA di qualsiasi analisi, devi determinare il tipo di prodotto:
-
-1. Se vedi MARCA/BRAND (Mulino Bianco, Barilla, Ferrero, etc.) = SEMPRE "per_100g"
-2. Se vedi CONFEZIONE con etichetta = SEMPRE "per_100g"  
-3. Se vedi LOGO aziendale = SEMPRE "per_100g"
-
-ESEMPI CHIARI:
-- Tarallucci Mulino Bianco = "per_100g" (NON breakdown!)
-- Biscotti Oro Saiwa = "per_100g" (NON breakdown!)
-- Nutella Ferrero = "per_100g" (NON breakdown!)
-- Oreo Nabisco = "per_100g" (NON breakdown!)
-- Pane fatto in casa = "breakdown" (ingredienti visibili)
-- Insalata = "breakdown" (ingredienti visibili)
-
-ANCHE SE vedi ingredienti separati, MA c'è un BRAND = "per_100g"!
-
-Rispondi SOLO con un JSON valido nel seguente formato:
-
-PER PRODOTTI CONFEZIONATI CON BRAND ("per_100g"):
-{
-  "productNameFromVision": "[nome prodotto]",
-  "brandFromVision": "[marca identificata]",
-  "healthScore": [numero da 1 a 100],
-  "analysis": "[analisi nutrizionale]",
-  "pros": [{"title": "[beneficio]", "detail": "[dettaglio]"}],
-  "cons": [{"title": "[problema]", "detail": "[dettaglio]"}],
-  "neutrals": [{"title": "[neutro]", "detail": "[dettaglio]"}],
-  "sustainabilityPros": [],
-  "sustainabilityCons": [],
-  "sustainabilityNeutrals": [],
-  "calorie_estimation_type": "per_100g",
-  "estimated_energy_kcal_100g": [numero],
-  "estimated_proteins_100g": [numero],
-  "estimated_carbs_100g": [numero], 
-  "estimated_fats_100g": [numero],
-  "calories_estimate": "~[numero] kcal per 100g",
-  "sustainabilityScore": 0
-}
-
-PER PASTI CASALINGHI ("breakdown"):
-{
-  "productNameFromVision": "[nome pasto]",
-  "brandFromVision": null,
-  "healthScore": [numero da 1 a 100],
-  "analysis": "[analisi nutrizionale]",
-  "pros": [{"title": "[beneficio]", "detail": "[dettaglio]"}],
-  "cons": [{"title": "[problema]", "detail": "[dettaglio]"}],
-  "neutrals": [{"title": "[neutro]", "detail": "[dettaglio]"}],
-  "sustainabilityPros": [],
-  "sustainabilityCons": [],
-  "sustainabilityNeutrals": [],
-  "calorie_estimation_type": "breakdown",
-  "ingredients_breakdown": [{"id":1,"name":"[ingrediente]","estimated_weight_g":50,"estimated_calories_kcal":100,"estimated_proteins_g":5,"estimated_carbs_g":15,"estimated_fats_g":2}],
-  "calories_estimate": "Totale: ~[numero] kcal",
-  "sustainabilityScore": 0
-}
-  `;
+// DESCRIZIONI STANDARD FISSE PER SCORE UFFICIALI - ESPORTATE
+export const NUTRI_SCORE_DESCRIPTIONS: Record<string, { type: 'pro' | 'con' | 'neutral', title: string, detail: string }> = {
+  'A': { type: 'pro', title: 'Nutri-Score A', detail: 'Prodotto con profilo nutrizionale eccellente secondo il sistema di valutazione europeo Nutri-Score.' },
+  'B': { type: 'pro', title: 'Nutri-Score B', detail: 'Prodotto con buon profilo nutrizionale secondo il sistema di valutazione europeo Nutri-Score.' },
+  'C': { type: 'neutral', title: 'Nutri-Score C', detail: 'Prodotto con profilo nutrizionale medio secondo il sistema di valutazione europeo Nutri-Score.' },
+  'D': { type: 'con', title: 'Nutri-Score D', detail: 'Prodotto con profilo nutrizionale scadente secondo il sistema di valutazione europeo Nutri-Score.' },
+  'E': { type: 'con', title: 'Nutri-Score E', detail: 'Prodotto con profilo nutrizionale molto scadente secondo il sistema di valutazione europeo Nutri-Score.' }
 };
+
+export const ECO_SCORE_DESCRIPTIONS: Record<string, { type: 'pro' | 'con' | 'neutral', title: string, detail: string }> = {
+  'A': { type: 'pro', title: 'Eco-Score A', detail: 'Prodotto con impatto ambientale molto basso secondo il sistema di valutazione Eco-Score.' },
+  'B': { type: 'pro', title: 'Eco-Score B', detail: 'Prodotto con basso impatto ambientale secondo il sistema di valutazione Eco-Score.' },
+  'C': { type: 'neutral', title: 'Eco-Score C', detail: 'Prodotto con impatto ambientale moderato secondo il sistema di valutazione Eco-Score.' },
+  'D': { type: 'con', title: 'Eco-Score D', detail: 'Prodotto con alto impatto ambientale secondo il sistema di valutazione Eco-Score.' },
+  'E': { type: 'con', title: 'Eco-Score E', detail: 'Prodotto con impatto ambientale molto alto secondo il sistema di valutazione Eco-Score.' }
+};
+
+export const NOVA_DESCRIPTIONS: Record<string, { type: 'pro' | 'con' | 'neutral', title: string, detail: string }> = {
+  '1': { type: 'pro', title: 'NOVA Gruppo 1', detail: 'Alimento non trasformato o minimamente trasformato secondo la classificazione NOVA.' },
+  '2': { type: 'neutral', title: 'NOVA Gruppo 2', detail: 'Ingrediente culinario trasformato secondo la classificazione NOVA.' },
+  '3': { type: 'con', title: 'NOVA Gruppo 3', detail: 'Alimento trasformato secondo la classificazione NOVA.' },
+  '4': { type: 'con', title: 'NOVA Gruppo 4', detail: 'Alimento ultra-trasformato secondo la classificazione NOVA.' }
+};
+
+
+
